@@ -1,0 +1,6 @@
+@Conferma_HostAddress = http://localhost:5145
+
+GET {{Conferma_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
