@@ -11,6 +11,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Valorizza", "Valorizza\Valo
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Conferma", "Conferma\Conferma.csproj", "{5F23B73E-A3C9-4DF2-BF40-AAD1F5C88C55}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ControllaStato", "ControllaStato\ControllaStato.csproj", "{C8D86461-5604-4A16-A0FE-8E9BF8A48452}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -33,6 +35,10 @@ Global
 		{5F23B73E-A3C9-4DF2-BF40-AAD1F5C88C55}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5F23B73E-A3C9-4DF2-BF40-AAD1F5C88C55}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5F23B73E-A3C9-4DF2-BF40-AAD1F5C88C55}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C8D86461-5604-4A16-A0FE-8E9BF8A48452}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C8D86461-5604-4A16-A0FE-8E9BF8A48452}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C8D86461-5604-4A16-A0FE-8E9BF8A48452}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C8D86461-5604-4A16-A0FE-8E9BF8A48452}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

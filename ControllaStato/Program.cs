@@ -1,4 +1,4 @@
-﻿using Invio.Services;
+using ControllaStato.Services;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using SharedLib.Config;
@@ -20,12 +20,11 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.Configure<LolServiceOptions>(
     builder.Configuration.GetSection("LOLService"));
 
-
 builder.Services.AddSingleton<IServiceSoapClient, ServiceSoapClient>();
-builder.Services.AddSingleton<IInvioQueue, InvioQueue>();
-builder.Services.AddSingleton<IInvioQueueTracker, InvioQueueTracker>();
-builder.Services.AddHostedService<InvioProcessor>();
-builder.Services.AddHostedService<InvioWatcher>();
+builder.Services.AddSingleton<IControllaStatoQueue, ControllaStatoQueue>();
+builder.Services.AddSingleton<IControllaStatoQueueTracker, ControllaStatoQueueTracker>();
+builder.Services.AddHostedService<ControllaStatoProcessor>();
+builder.Services.AddHostedService<ControllaStatoWatcher>();
 builder.Services.AddScoped<ILogService, LogService>();
 
 builder.Services.AddControllers();

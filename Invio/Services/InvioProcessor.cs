@@ -55,10 +55,10 @@ public class InvioProcessor : BackgroundService
                     items.Add(item);
                 }
 
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 foreach (var item in items)
                 {
-                    using var scope = _scopeFactory.CreateScope();
-                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
                     try
                     {
@@ -130,8 +130,9 @@ public class InvioProcessor : BackgroundService
                         {
                             var esito = await service.InvioAsync(requestId, user.BusinessName, "", ls);
 
-                            message = esito.CEResult.Description.Replace("Postel", "Poste");
+                            message = esito.CEResult.Description;
 
+                            n.StatoMarker = esito.CEResult.Type;
                             n.RequestId = requestId;
                             n.CurrentState = esito.CEResult.Type == "I"
                                 ? (int)CurrentState.accettatoOnline

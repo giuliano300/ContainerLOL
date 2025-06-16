@@ -109,9 +109,11 @@ public partial class Recipients
     public string? FiscalCode { get; set; }
 
 	public string? Mobile { get; set; }
-	public string? RequestId { get; set; }
+    public string? RequestId { get; set; }
+    public string? StatoMarker { get; set; }
 
-    public bool? worked {  get; set; }
+    public bool? worked { get; set; }
+    public bool? finalState { get; set; }
 
     public int? TentativiValorizzazione { get; set; }
     public virtual ICollection<Bulletins> Bulletins { get; set; } = new List<Bulletins>();

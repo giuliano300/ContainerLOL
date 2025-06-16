@@ -44,7 +44,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<RecipientWorks> RecipientWorks { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
-        => optionsBuilder.UseSqlServer("Server=DESKTOP-7IBMRI9\\SQLEXPRESS;Database=_es;Trusted_Connection=True;TrustServerCertificate=True;");
+        => optionsBuilder.UseSqlServer("Server=DESKTOP-7IBMRI9\\SQLEXPRESS;Database=_es;Trusted_Connection=True;TrustServerCertificate=True");
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
