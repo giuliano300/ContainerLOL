@@ -1,6 +1,0 @@
-@ControllaStato_HostAddress = http://localhost:5011
-
-GET {{ControllaStato_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###

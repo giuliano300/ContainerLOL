@@ -164,6 +164,9 @@ public class InvioProcessor : BackgroundService
                     {
                         _logger.LogError(ex, "Errore generale nella lavorazione dell'invio.");
                     }
+
+                    _tracker.Untrack(item.NameId); // dopo aver salvato o gestito l’errore libera la coda
+
                 }
             }
             finally
