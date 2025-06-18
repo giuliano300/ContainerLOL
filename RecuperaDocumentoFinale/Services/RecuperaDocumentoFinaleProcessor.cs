@@ -33,11 +33,11 @@ public class RecuperaDocumentoFinaleProcessor : BackgroundService
         _logger = logger;
         _tracker = tracker;
         _connection = connection;
+        _channel = _connection.CreateModel();
     }
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _channel = _connection.CreateModel();
         _channel.QueueDeclare(queue: QueueName, durable: true, exclusive: false, autoDelete: false);
 
         var consumer = new AsyncEventingBasicConsumer(_channel);
