@@ -5,6 +5,7 @@ using SharedLib.WsdlModels;
 using SharedLib.Utils;
 using SharedLib.Models;
 using System.Diagnostics;
+using SharedLib.Messaging;
 
 public class ValorizzaWatcher : BackgroundService
 {
@@ -12,12 +13,17 @@ public class ValorizzaWatcher : BackgroundService
     private readonly TimeSpan _delay = TimeSpan.FromSeconds(20);
     private readonly ILogger<ValorizzaProcessor> _logger;
     private readonly IValorizzaQueueTracker _tracker;
+    private readonly IRabbitPublisher _publisher;
 
-    public ValorizzaWatcher(IServiceProvider serviceProvider, ILogger<ValorizzaProcessor> logger, IValorizzaQueueTracker tracker)
+    private const string QUEUE_NAME = "valorizza_lol_queue";
+
+    public ValorizzaWatcher(IServiceProvider serviceProvider, ILogger<ValorizzaProcessor> logger, IValorizzaQueueTracker tracker,
+                        IRabbitPublisher publisher)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
         _tracker = tracker;
+        _publisher = publisher;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -28,53 +34,53 @@ public class ValorizzaWatcher : BackgroundService
             {
                 using var scope = _serviceProvider.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                var queue = scope.ServiceProvider.GetRequiredService<IValorizzaQueue>();
 
                 var newRecipients = await db.Recipients
                     .Include(r => r.Operations)
-                    .Where(r => r.CurrentState == (int)CurrentState.accettatoOnline &&
+                    .Where(r =>
+                        r.CurrentState == (int)CurrentState.accettatoOnline &&
                         r.Valid &&
                         r.Operations.Complete &&
                         r.ProductType == (int)ProductTypes.LOL &&
                         r.Format == (int)FormatType.A4 &&
-                        r.InProcess != true)
-                    .Take(10)
-                    .ToListAsync();
+                        r.InProcessStep2 != true)
+                    .OrderBy(r => r.Id)
+                    .Take(20)
+                    .ToListAsync(stoppingToken);
+
+                var recipientsToPublish = new List<ValorizzaItem>();
 
                 foreach (var r in newRecipients)
                 {
                     if (!_tracker.TryTrack(r.Id))
                     {
-                        _logger.LogInformation($"Recipient {r.Id} già in coda per valorizza. Skippato.");
+                        _logger.LogInformation($"Recipient {r.Id} già in coda per invio. Skippato.");
                         continue;
                     }
 
-                    ValorizzaItem item = new ValorizzaItem()
-                    {
-                        NameId = r.Id,
-                        RequesId = r.RequestId!
-                    };
-
-                    queue.Enqueue(item);
-
-                    r.InProcess = true;
+                    r.InProcessStep2 = true;
                     r.worked = false;
 
-                    RecipientWorks recipientWorks = new RecipientWorks()
+                    db.RecipientWorks.Add(new RecipientWorks
                     {
-                        Message = "Inserito in coda",
+                        Message = "Inserito in coda valorizza",
                         RecipientId = r.Id,
                         WorkDate = DateTime.UtcNow,
                         WorkStatus = (int)WorkStatus.InCodaValorizza
-                    };
-                    db.RecipientWorks.Add(recipientWorks);
+                    });
+
+                    recipientsToPublish.Add(new ValorizzaItem { NameId = r.Id , RequesId = r.RequestId! });
                 }
 
-                await db.SaveChangesAsync();
+                await db.SaveChangesAsync(stoppingToken);
+
+                // 📤 Poi pubblichi su RabbitMQ
+                foreach (var item in recipientsToPublish)
+                    await _publisher.PublishAsync(QUEUE_NAME, item);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Errore nel processor InvioWatcher.");
+                _logger.LogError(ex, "❌ Errore nel processor ValorizzaWatcher.");
             }
 
             await Task.Delay(_delay, stoppingToken);

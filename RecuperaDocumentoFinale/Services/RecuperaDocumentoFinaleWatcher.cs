@@ -1,22 +1,22 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using SharedLib.Db;
 using SharedLib.Models;
-using Conferma.Services;
+using RecuperaDocumentoFinale.Services;
 using SharedLib.WsdlModels;
 using SharedLib.Utils;
-using SharedLib.Messaging; // per IRabbitPublisher
+using SharedLib.Messaging;
 
-public class ConfermaWatcher : BackgroundService
+public class RecuperaDocumentoFinaleWatcher : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
-    private readonly TimeSpan _delay = TimeSpan.FromSeconds(20); // ogni 20 secondi
-    private readonly ILogger<ConfermaProcessor> _logger;
-    private readonly IConfermaQueueTracker _tracker;
+    private readonly TimeSpan _delay = TimeSpan.FromHours(1); // ogni 1 ora
+    private readonly ILogger<RecuperaDocumentoFinaleProcessor> _logger;
+    private readonly IRecuperaDocumentoFinaleQueueTracker _tracker;
     private readonly IRabbitPublisher _publisher;
 
-    private const string QUEUE_NAME = "conferma_lol_queue";
+    private const string QUEUE_NAME = "recupera_documento_finale_lol_queue";
 
-    public ConfermaWatcher(IServiceProvider serviceProvider, ILogger<ConfermaProcessor> logger, IConfermaQueueTracker tracker,
+    public RecuperaDocumentoFinaleWatcher(IServiceProvider serviceProvider, ILogger<RecuperaDocumentoFinaleProcessor> logger, IRecuperaDocumentoFinaleQueueTracker tracker,
                         IRabbitPublisher publisher)
     {
         _serviceProvider = serviceProvider;
@@ -37,14 +37,19 @@ public class ConfermaWatcher : BackgroundService
                 var newRecipients = await db.Recipients
                     .Include(r => r.Operations)
                     .Where(r =>
-                        r.CurrentState == (int)CurrentState.documentoValidato &&
+                        r.CurrentState == (int)CurrentState.presaInCarico &&
                         r.Valid &&
                         r.Operations.Complete &&
                         r.ProductType == (int)ProductTypes.LOL &&
                         r.Format == (int)FormatType.A4 &&
-                        r.InProcessStep3 != true)
-                    .OrderBy(r => r.Id)
-                    .Take(20)
+                        r.Code != null && r.Code != "" &&
+                        (
+                            r.PathRecoveryFile == null || 
+                            r.PathRecoveryFile == ""
+                        )
+                        && r.InProcessStep4 != true
+                     )
+                    .Take(50)
                     .ToListAsync(stoppingToken);
 
                 var recipientsToPublish = new List<ConfermaItem>();
@@ -57,12 +62,12 @@ public class ConfermaWatcher : BackgroundService
                         continue;
                     }
 
-                    r.InProcessStep3 = true;
+                    r.InProcessStep4 = true;
                     r.worked = false;
 
                     db.RecipientWorks.Add(new RecipientWorks
                     {
-                        Message = "Inserito in coda conferma",
+                        Message = "Inserito in coda recupera documento finale",
                         RecipientId = r.Id,
                         WorkDate = DateTime.UtcNow,
                         WorkStatus = (int)WorkStatus.InCodaConferma
@@ -79,7 +84,7 @@ public class ConfermaWatcher : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "❌ Errore nel processor ConfermaWatcher.");
+                _logger.LogError(ex, "Errore nel processor RecuperaDocumentoFinaleWatcher.");
             }
 
             await Task.Delay(_delay, stoppingToken);

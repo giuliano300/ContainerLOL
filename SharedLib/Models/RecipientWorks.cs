@@ -5,7 +5,7 @@ namespace SharedLib.Models;
 
 public partial class RecipientWorks
 {
-    public int Id { get; set; }
+    public Guid Id { get; set; }
 
     public int RecipientId { get; set; }
 
@@ -16,4 +16,9 @@ public partial class RecipientWorks
     public string? Message { get; set; }
 
     public virtual Recipients Recipient { get; set; } = null!;
+
+    public RecipientWorks() 
+    {
+        Id = Guid.NewGuid();    
+    }
 }

@@ -106,7 +106,9 @@ public enum CurrentState
         InCodaValorizza = 3,
 		InviatoValorizza = 4,
 		InCodaConferma = 5,
-		InviatoConferma = 6
+		InviatoConferma = 6,
+        InCodaRecuperaDocumentoFinale = 7,
+        InviatoRecuperaDocumentoFinale = 8
     }
 
 

@@ -82,7 +82,6 @@ public partial class Recipients
     public string? Tag6 { get; set; }
 
     public bool? Notified { get; set; }
-    public bool? InProcess { get; set; }
 
     public bool FromApi { get; set; }
 
@@ -116,6 +115,14 @@ public partial class Recipients
     public bool? finalState { get; set; }
 
     public int? TentativiValorizzazione { get; set; }
+
+    public bool? InProcessStep1 { get; set; }
+    public bool? InProcessStep2 { get; set; }
+    public bool? InProcessStep3 { get; set; }
+    public bool? InProcessStep4 { get; set; }
+
+
+
     public virtual ICollection<Bulletins> Bulletins { get; set; } = new List<Bulletins>();
 
     public virtual ICollection<HistoricRecipientStatus> HistoricRecipientStatus { get; set; } = new List<HistoricRecipientStatus>();

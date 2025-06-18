@@ -1,27 +1,30 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using SharedLib.Db;
 using SharedLib.Models;
-using SharedLib.Config;
-using Microsoft.Extensions.Options;
 using Invio.Services;
-using ServiceReference;
 using SharedLib.WsdlModels;
 using SharedLib.Utils;
-using Microsoft.SqlServer.Server;
-using System.Diagnostics;
+using SharedLib.Messaging; // per IRabbitPublisher
 
 public class InvioWatcher : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
-    private readonly TimeSpan _delay = TimeSpan.FromSeconds(20); // ogni 20 secondi
+    private readonly TimeSpan _delay = TimeSpan.FromSeconds(20);
     private readonly ILogger<InvioProcessor> _logger;
     private readonly IInvioQueueTracker _tracker;
+    private readonly IRabbitPublisher _publisher;
 
-    public InvioWatcher(IServiceProvider serviceProvider, ILogger<InvioProcessor> logger, IInvioQueueTracker tracker)
+    private const string QUEUE_NAME = "invio_lol_queue";
+
+    public InvioWatcher(IServiceProvider serviceProvider,
+                        ILogger<InvioProcessor> logger,
+                        IInvioQueueTracker tracker,
+                        IRabbitPublisher publisher)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
         _tracker = tracker;
+        _publisher = publisher;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -32,7 +35,6 @@ public class InvioWatcher : BackgroundService
             {
                 using var scope = _serviceProvider.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                var queue = scope.ServiceProvider.GetRequiredService<IInvioQueue>();
 
                 var newRecipients = await db.Recipients
                     .Include(r => r.Operations)
@@ -42,9 +44,12 @@ public class InvioWatcher : BackgroundService
                         r.Operations.Complete &&
                         r.ProductType == (int)ProductTypes.LOL &&
                         r.Format == (int)FormatType.A4 &&
-                        r.InProcess != true)
-                    .Take(10)
+                        r.InProcessStep1 != true)
+                    .OrderBy(r => r.Id)
+                    .Take(20)
                     .ToListAsync(stoppingToken);
+
+                var recipientsToPublish = new List<InvioItem>();
 
                 foreach (var r in newRecipients)
                 {
@@ -54,27 +59,29 @@ public class InvioWatcher : BackgroundService
                         continue;
                     }
 
-                    var item = new InvioItem { NameId = r.Id };
-                    queue.Enqueue(item);
-
-                    r.InProcess = false;
-                    r.worked = true;
+                    r.InProcessStep1 = true;
+                    r.worked = false;
 
                     db.RecipientWorks.Add(new RecipientWorks
                     {
-                        Message = "Inserito in coda",
+                        Message = "Inserito in coda invio",
                         RecipientId = r.Id,
                         WorkDate = DateTime.UtcNow,
                         WorkStatus = (int)WorkStatus.InCodaInvio
                     });
 
+                    recipientsToPublish.Add(new InvioItem { NameId = r.Id });
                 }
 
                 await db.SaveChangesAsync(stoppingToken);
+
+                // 📤 Poi pubblichi su RabbitMQ
+                foreach (var item in recipientsToPublish)
+                    await _publisher.PublishAsync(QUEUE_NAME, item);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Errore nel processor InvioWatcher.");
+                _logger.LogError(ex, "❌ Errore nel processor InvioWatcher.");
             }
 
             await Task.Delay(_delay, stoppingToken);

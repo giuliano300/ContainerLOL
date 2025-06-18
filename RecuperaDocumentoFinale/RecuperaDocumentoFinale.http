@@ -1,0 +1,6 @@
+@RecuperaDocumentoFinale_HostAddress = http://localhost:5249
+
+GET {{RecuperaDocumentoFinale_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

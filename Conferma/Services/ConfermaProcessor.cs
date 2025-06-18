@@ -1,148 +1,165 @@
 ﻿using Conferma.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Newtonsoft.Json;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 using ServiceReference;
 using SharedLib.Config;
 using SharedLib.Db;
 using SharedLib.Models;
 using SharedLib.Utils;
 using SharedLib.WsdlModels;
+using System.Text;
 
 public class ConfermaProcessor : BackgroundService
 {
-    private readonly IConfermaQueue _queue;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly LolServiceOptions _options;
     private readonly ILogger<ConfermaProcessor> _logger;
     private readonly IConfermaQueueTracker _tracker;
-    private readonly TimeSpan _delay = TimeSpan.FromSeconds(30); // ogni 30 secondi
+    private readonly IConnection _connection;
+    private IModel _channel;
+    private const string QueueName = "conferma_lol_queue";
 
-    private readonly SemaphoreSlim _executionLock = new(1, 1); // 🔒 Blocca esecuzioni parallele
-
-    public ConfermaProcessor(IConfermaQueue queue,
+    public ConfermaProcessor(
         IServiceScopeFactory scopeFactory,
         IOptions<LolServiceOptions> options,
         ILogger<ConfermaProcessor> logger,
-        IConfermaQueueTracker tracker)
+        IConfermaQueueTracker tracker,
+        IConnection connection)
     {
-        _queue = queue;
         _scopeFactory = scopeFactory;
         _options = options.Value;
         _logger = logger;
         _tracker = tracker;
+        _connection = connection;
+        _channel = _connection.CreateModel();
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        _channel.QueueDeclare(queue: QueueName, durable: true, exclusive: false, autoDelete: false);
+
+        var consumer = new AsyncEventingBasicConsumer(_channel);
+        consumer.Received += async (model, ea) =>
         {
-            var acquired = await _executionLock.WaitAsync(0, stoppingToken);
-            if (!acquired)
-            {
-                _logger.LogInformation("⏳ Ciclo già in esecuzione, attende la fine del ciclo...");
-                await Task.Delay(_delay, stoppingToken);
-                continue;
-            }
+            var body = ea.Body.ToArray();
+            var json = Encoding.UTF8.GetString(body);
+
+            ConfermaItem? item;
             try
             {
-
-                var items = new List<ConfermaItem>();
-
-                while (_queue.TryDequeue(out var item))
+                item = JsonConvert.DeserializeObject<ConfermaItem>(json);
+                if (item == null)
                 {
-                    items.Add(item);
-                }
-
-                using var scope = _scopeFactory.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                foreach (var item in items)
-                {
-
-                    var n = await db.Recipients
-                        .Include(x => x.Operations).ThenInclude(o => o.Users)
-                        .Include(x => x.Operations).ThenInclude(o => o.Senders)
-                        .FirstOrDefaultAsync(x => x.Id == item.NameId, stoppingToken);
-
-                    if (n == null)
-                    {
-                        _logger.LogError("Recipient non trovato.");
-                        return;
-                    }
-
-                    try
-                    {
-                        var user = n.Operations.Users;
-                        var service = LOLServiceHelper.GetNewServiceLOL(user, _options);
-
-                        var richieste = new[] { new Richiesta { IDRichiesta = n.RequestId } };
-                        var preConferma = await service.PreConfermaAsync(richieste, true);
-
-                        var result = preConferma.PreConfermaResult;
-
-                        if (result.CEResult.Type == "I" && result.DestinatariLettera?.Length > 0)
-                        {
-                            n.CurrentState = (int)CurrentState.presaInCarico;
-                            n.Code = preConferma.PreConfermaResult.DestinatariLettera[0].IdRicevuta;
-                            n.Message = "Presa in Carico Poste";
-
-                            var dcs = await service.RecuperaDocumentoFinaleAsync(n.Code);
-                            if (dcs.RecuperaDocumentoFinaleResult.CEResult.Type == "I")
-                                n.PathRecoveryFile = Convert.ToBase64String(dcs.RecuperaDocumentoFinaleResult.Documento.Contenuto);
-
-                            _logger.LogInformation($"Conferma recipient n.{n.Id}");
-                        }
-                        else
-                        {
-                            n.Message = preConferma.PreConfermaResult.CEResult.Description;
-                            n.Valid = false;
-                            n.CurrentState = (int)CurrentState.ErroreConfirm;
-
-                            _logger.LogWarning($"Errore conferma recipient n.{n.Id}");
-                        }
-
-                        n.InProcess = false;
-                        n.worked = true;
-
-                        db.RecipientWorks.Add(new RecipientWorks
-                        {
-                            Message = n.Message,
-                            RecipientId = n.Id,
-                            WorkDate = DateTime.UtcNow,
-                            WorkStatus = (int)WorkStatus.InviatoConferma
-                        });
-
-                        await db.SaveChangesAsync(stoppingToken);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Errore durante la validazione WSDL");
-
-                        n.CurrentState = (int)CurrentState.ErroreGenerico;
-                        n.Message = ex.Message;
-                        n.Valid = false;
-                        n.InProcess = false;
-                        n.worked = true;
-
-                        db.RecipientWorks.Add(new RecipientWorks
-                        {
-                            Message = ex.Message,
-                            RecipientId = n.Id,
-                            WorkDate = DateTime.UtcNow,
-                            WorkStatus = (int)WorkStatus.InviatoConferma
-                        });
-
-                        await db.SaveChangesAsync(stoppingToken);
-                    }
-
-                    _tracker.Untrack(n.Id);
+                    _logger.LogWarning("Messaggio non valido: {Json}", json);
+                    _channel.BasicAck(ea.DeliveryTag, false);
+                    return;
                 }
             }
-            finally
+            catch (Exception ex)
             {
-                _executionLock.Release(); // ✅ Semaforo sempre rilasciato
+                _logger.LogError(ex, "Errore nella deserializzazione del messaggio RabbitMQ.");
+                _channel.BasicAck(ea.DeliveryTag, false);
+                return;
             }
 
-            await Task.Delay(_delay, stoppingToken);
+            await ProcessItemAsync(item, stoppingToken);
+            _channel.BasicAck(ea.DeliveryTag, false);
+        };
+
+        _channel.BasicConsume(queue: QueueName, autoAck: false, consumer: consumer);
+
+        return Task.CompletedTask;
+    }
+
+    private async Task ProcessItemAsync(ConfermaItem item, CancellationToken stoppingToken)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        try
+        {
+            var n = await db.Recipients
+                .Include(x => x.Operations).ThenInclude(o => o.Users)
+                .Include(x => x.Operations).ThenInclude(o => o.Senders)
+                .FirstOrDefaultAsync(x => x.Id == item.NameId, stoppingToken);
+
+            if (n == null)
+            {
+                _logger.LogError("Recipient non trovato.");
+                return;
+            }
+
+            var user = n.Operations.Users;
+            var service = LOLServiceHelper.GetNewServiceLOL(user, _options);
+
+            var richieste = new[] { new Richiesta { IDRichiesta = n.RequestId } };
+            var preConferma = await service.PreConfermaAsync(richieste, true);
+            var result = preConferma.PreConfermaResult;
+
+            if (result.CEResult.Type == "I" && result.DestinatariLettera?.Length > 0)
+            {
+                n.CurrentState = (int)CurrentState.presaInCarico;
+                n.Code = result.DestinatariLettera[0].IdRicevuta;
+                n.Message = "Presa in Carico Poste";
+
+                var dcs = await service.RecuperaDocumentoFinaleAsync(n.Code);
+                if (dcs.RecuperaDocumentoFinaleResult.CEResult.Type == "I")
+                    n.PathRecoveryFile = Convert.ToBase64String(dcs.RecuperaDocumentoFinaleResult.Documento.Contenuto);
+
+                _logger.LogInformation($"Conferma recipient n.{n.Id}");
+            }
+            else
+            {
+                n.Message = result.CEResult.Description;
+                n.Valid = false;
+                n.CurrentState = (int)CurrentState.ErroreConfirm;
+
+                _logger.LogWarning($"Errore conferma recipient n.{n.Id}");
+            }
+
+            n.InProcessStep3 = false;
+            n.worked = true;
+
+            db.RecipientWorks.Add(new RecipientWorks
+            {
+                Message = n.Message,
+                RecipientId = n.Id,
+                WorkDate = DateTime.UtcNow,
+                WorkStatus = (int)WorkStatus.InviatoConferma
+            });
+
+            await db.SaveChangesAsync(stoppingToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Errore durante la validazione WSDL");
+
+            var n = await db.Recipients.FirstOrDefaultAsync(x => x.Id == item.NameId, stoppingToken);
+            if (n != null)
+            {
+                n.CurrentState = (int)CurrentState.ErroreGenerico;
+                n.Message = ex.Message;
+                n.Valid = false;
+                n.InProcessStep3 = false;
+                n.worked = true;
+
+                db.RecipientWorks.Add(new RecipientWorks
+                {
+                    Message = ex.Message,
+                    RecipientId = n.Id,
+                    WorkDate = DateTime.UtcNow,
+                    WorkStatus = (int)WorkStatus.InviatoConferma
+                });
+
+                await db.SaveChangesAsync(stoppingToken);
+            }
+        }
+        finally
+        {
+            _tracker.Untrack(item.NameId);
         }
     }
 }

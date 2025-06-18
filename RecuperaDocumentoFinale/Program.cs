@@ -1,9 +1,10 @@
-﻿using SharedLib.Db;
-using SharedLib.Services;
+﻿using RecuperaDocumentoFinale.Services;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
-using Valorizza.Services;
 using SharedLib.Config;
+using SharedLib.Db;
+using SharedLib.Models;
+using SharedLib.Services;
 using RabbitMQ.Client.Exceptions;
 using RabbitMQ.Client;
 using SharedLib.Messaging;
@@ -25,10 +26,10 @@ builder.Services.Configure<LolServiceOptions>(
 
 
 builder.Services.AddSingleton<IServiceSoapClient, ServiceSoapClient>();
-builder.Services.AddSingleton<IValorizzaQueue, ValorizzaQueue>();
-builder.Services.AddSingleton<IValorizzaQueueTracker, ValorizzaQueueTracker>();
-builder.Services.AddHostedService<ValorizzaProcessor>();
-builder.Services.AddHostedService<ValorizzaWatcher>();
+builder.Services.AddSingleton<IRecuperaDocumentoFinaleQueue, RecuperaDocumentoFinaleQueue>();
+builder.Services.AddSingleton<IRecuperaDocumentoFinaleQueueTracker, RecuperaDocumentoFinaleQueueTracker>();
+builder.Services.AddHostedService<RecuperaDocumentoFinaleProcessor>();
+builder.Services.AddHostedService<RecuperaDocumentoFinaleWatcher>();
 builder.Services.AddScoped<ILogService, LogService>();
 
 builder.Services.AddSingleton<IRabbitPublisher, RabbitPublisher>();
@@ -69,5 +70,4 @@ builder.Services.AddControllers();
 
 var app = builder.Build();
 
-app.MapControllers();
 app.Run();
