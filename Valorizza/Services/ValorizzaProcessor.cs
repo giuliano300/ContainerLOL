@@ -10,6 +10,7 @@ using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using System.Text;
 using Newtonsoft.Json;
+using System.Threading;
 
 namespace Valorizza.Services;
 
@@ -21,6 +22,9 @@ public class ValorizzaProcessor : BackgroundService
     private readonly IValorizzaQueueTracker _tracker;
     private readonly IConnection _connection;
     private IModel _channel;
+
+    private readonly SemaphoreSlim _semaphore = new(1, 1);
+
     private const string QueueName = "valorizza_lol_queue";
 
     public ValorizzaProcessor(
@@ -45,29 +49,44 @@ public class ValorizzaProcessor : BackgroundService
         var consumer = new AsyncEventingBasicConsumer(_channel);
         consumer.Received += async (model, ea) =>
         {
-            var body = ea.Body.ToArray();
-            var json = Encoding.UTF8.GetString(body);
-
-            ValorizzaItem? item;
-            try
+            var acquired = await _semaphore.WaitAsync(0, stoppingToken);
+            if (!acquired)
             {
-                item = JsonConvert.DeserializeObject<ValorizzaItem>(json);
-                if (item == null)
-                {
-                    _logger.LogWarning("Messaggio non valido: {Json}", json);
-                    _channel.BasicAck(ea.DeliveryTag, false);
-                    return;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Errore nella deserializzazione del messaggio RabbitMQ.");
-                _channel.BasicAck(ea.DeliveryTag, false);
+                _logger.LogWarning("⚠️ Processo già in esecuzione. Skip del messaggio.");
+                _channel.BasicNack(ea.DeliveryTag, false, requeue: true); // rimanda il messaggio in coda
                 return;
             }
 
-            await ProcessItemAsync(item, stoppingToken);
-            _channel.BasicAck(ea.DeliveryTag, false);
+            try
+            {
+                var body = ea.Body.ToArray();
+                var json = Encoding.UTF8.GetString(body);
+
+                ValorizzaItem? item;
+                try
+                {
+                    item = JsonConvert.DeserializeObject<ValorizzaItem>(json);
+                    if (item == null)
+                    {
+                        _logger.LogWarning("Messaggio non valido: {Json}", json);
+                        _channel.BasicAck(ea.DeliveryTag, false);
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Errore nella deserializzazione del messaggio RabbitMQ.");
+                    _channel.BasicAck(ea.DeliveryTag, false);
+                    return;
+                }
+
+                await ProcessItemAsync(item, stoppingToken);
+                _channel.BasicAck(ea.DeliveryTag, false);
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
         };
 
         _channel.BasicConsume(queue: QueueName, autoAck: false, consumer: consumer);

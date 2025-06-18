@@ -10,6 +10,7 @@ using SharedLib.Utils;
 using SharedLib.WsdlModels;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 
 public class RecuperaDocumentoFinaleProcessor : BackgroundService
 {
@@ -19,6 +20,9 @@ public class RecuperaDocumentoFinaleProcessor : BackgroundService
     private readonly IRecuperaDocumentoFinaleQueueTracker _tracker;
     private readonly IConnection _connection;
     private IModel _channel;
+
+    private readonly SemaphoreSlim _semaphore = new(1, 1);
+
     private const string QueueName = "recupera_documento_finale_lol_queue";
 
     public RecuperaDocumentoFinaleProcessor(
@@ -43,29 +47,44 @@ public class RecuperaDocumentoFinaleProcessor : BackgroundService
         var consumer = new AsyncEventingBasicConsumer(_channel);
         consumer.Received += async (model, ea) =>
         {
-            var body = ea.Body.ToArray();
-            var json = Encoding.UTF8.GetString(body);
-
-            ConfermaItem? item = null;
-            try
+            var acquired = await _semaphore.WaitAsync(0, stoppingToken);
+            if (!acquired)
             {
-                item = JsonSerializer.Deserialize<ConfermaItem>(json);
-                if (item == null)
-                {
-                    _logger.LogWarning("Messaggio non valido: {Json}", json);
-                    _channel.BasicAck(ea.DeliveryTag, false);
-                    return;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Errore nella deserializzazione del messaggio RabbitMQ.");
-                _channel.BasicAck(ea.DeliveryTag, false);
+                _logger.LogWarning("⚠️ Processo già in esecuzione. Skip del messaggio.");
+                _channel.BasicNack(ea.DeliveryTag, false, requeue: true); // rimanda il messaggio in coda
                 return;
             }
 
-            await ProcessItemAsync(item, stoppingToken);
-            _channel.BasicAck(ea.DeliveryTag, false);
+            try
+            {
+                var body = ea.Body.ToArray();
+                var json = Encoding.UTF8.GetString(body);
+
+                ConfermaItem? item = null;
+                try
+                {
+                    item = JsonSerializer.Deserialize<ConfermaItem>(json);
+                    if (item == null)
+                    {
+                        _logger.LogWarning("Messaggio non valido: {Json}", json);
+                        _channel.BasicAck(ea.DeliveryTag, false);
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Errore nella deserializzazione del messaggio RabbitMQ.");
+                    _channel.BasicAck(ea.DeliveryTag, false);
+                    return;
+                }
+
+                await ProcessItemAsync(item, stoppingToken);
+                _channel.BasicAck(ea.DeliveryTag, false);
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
         };
 
         _channel.BasicConsume(queue: QueueName, autoAck: false, consumer: consumer);

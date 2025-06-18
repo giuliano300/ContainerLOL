@@ -23,6 +23,8 @@ public class InvioProcessor : BackgroundService
     private IModel _channel;
     private const string QueueName = "invio_lol_queue";
 
+    private readonly SemaphoreSlim _semaphore = new(1, 1);
+
     public InvioProcessor(
         IServiceScopeFactory scopeFactory,
         IOptions<LolServiceOptions> options,
@@ -45,29 +47,44 @@ public class InvioProcessor : BackgroundService
         var consumer = new AsyncEventingBasicConsumer(_channel);
         consumer.Received += async (model, ea) =>
         {
-            var body = ea.Body.ToArray();
-            var json = Encoding.UTF8.GetString(body);
 
-            InvioItem? item;
+            var acquired = await _semaphore.WaitAsync(0, stoppingToken);
+            if (!acquired)
+            {
+                _logger.LogWarning("⚠️ Processo già in esecuzione. Skip del messaggio.");
+                _channel.BasicNack(ea.DeliveryTag, false, requeue: true); // rimanda il messaggio in coda
+                return;
+            }
             try
             {
-                item = JsonConvert.DeserializeObject<InvioItem>(json);
-                if (item == null)
+                var body = ea.Body.ToArray();
+                var json = Encoding.UTF8.GetString(body);
+
+                InvioItem? item;
+                try
                 {
-                    _logger.LogWarning("Messaggio non valido: {Json}", json);
+                    item = JsonConvert.DeserializeObject<InvioItem>(json);
+                    if (item == null)
+                    {
+                        _logger.LogWarning("Messaggio non valido: {Json}", json);
+                        _channel.BasicAck(ea.DeliveryTag, false);
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Errore nella deserializzazione del messaggio RabbitMQ.");
                     _channel.BasicAck(ea.DeliveryTag, false);
                     return;
                 }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Errore nella deserializzazione del messaggio RabbitMQ.");
-                _channel.BasicAck(ea.DeliveryTag, false);
-                return;
-            }
 
-            await ProcessItemAsync(item, stoppingToken);
-            _channel.BasicAck(ea.DeliveryTag, false);
+                await ProcessItemAsync(item, stoppingToken);
+                _channel.BasicAck(ea.DeliveryTag, false);
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
         };
 
         _channel.BasicConsume(queue: QueueName, autoAck: false, consumer: consumer);

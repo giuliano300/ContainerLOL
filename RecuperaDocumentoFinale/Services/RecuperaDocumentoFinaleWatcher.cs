@@ -49,7 +49,7 @@ public class RecuperaDocumentoFinaleWatcher : BackgroundService
                         )
                         && r.InProcessStep4 != true
                      )
-                    .Take(50)
+                    .Take(500)
                     .ToListAsync(stoppingToken);
 
                 var recipientsToPublish = new List<ConfermaItem>();
