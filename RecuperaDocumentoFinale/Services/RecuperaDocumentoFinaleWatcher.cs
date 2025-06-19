@@ -70,7 +70,7 @@ public class RecuperaDocumentoFinaleWatcher : BackgroundService
                         Message = "Inserito in coda recupera documento finale",
                         RecipientId = r.Id,
                         WorkDate = DateTime.UtcNow,
-                        WorkStatus = (int)WorkStatus.InCodaConferma
+                        WorkStatus = (int)WorkStatus.InCodaRecuperaDocumentoFinale
                     });
 
                     recipientsToPublish.Add(new ConfermaItem { NameId = r.Id, RequesId = r.RequestId! });

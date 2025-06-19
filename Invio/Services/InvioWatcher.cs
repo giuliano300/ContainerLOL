@@ -9,7 +9,7 @@ using SharedLib.Messaging; // per IRabbitPublisher
 public class InvioWatcher : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
-    private readonly TimeSpan _delay = TimeSpan.FromSeconds(20);
+    private readonly TimeSpan _delay = TimeSpan.FromSeconds(5);
     private readonly ILogger<InvioProcessor> _logger;
     private readonly IInvioQueueTracker _tracker;
     private readonly IRabbitPublisher _publisher;

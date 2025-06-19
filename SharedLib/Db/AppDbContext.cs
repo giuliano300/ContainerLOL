@@ -43,9 +43,6 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<Users> Users { get; set; }
     public virtual DbSet<RecipientWorks> RecipientWorks { get; set; }
 
-    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
-        => optionsBuilder.UseSqlServer("Server=host.docker.internal,1433;Database=_es;User Id=es_user;Password=EsEWT!010101123;TrustServerCertificate=True");
-
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Bulletins>(entity =>

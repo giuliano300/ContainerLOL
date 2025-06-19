@@ -24,7 +24,6 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.Configure<LolServiceOptions>(
     builder.Configuration.GetSection("LOLService"));
 
-
 builder.Services.AddSingleton<IServiceSoapClient, ServiceSoapClient>();
 builder.Services.AddSingleton<IRecuperaDocumentoFinaleQueue, RecuperaDocumentoFinaleQueue>();
 builder.Services.AddSingleton<IRecuperaDocumentoFinaleQueueTracker, RecuperaDocumentoFinaleQueueTracker>();

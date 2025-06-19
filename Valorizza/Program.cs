@@ -23,7 +23,6 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.Configure<LolServiceOptions>(
     builder.Configuration.GetSection("LOLService"));
 
-
 builder.Services.AddSingleton<IServiceSoapClient, ServiceSoapClient>();
 builder.Services.AddSingleton<IValorizzaQueue, ValorizzaQueue>();
 builder.Services.AddSingleton<IValorizzaQueueTracker, ValorizzaQueueTracker>();
