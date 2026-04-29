@@ -10,6 +10,14 @@ using SharedLib.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Configuration
+    .SetBasePath(AppContext.BaseDirectory)
+    .AddJsonFile("sharedsettings.json", optional: false, reloadOnChange: true)
+    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
+
+builder.Host.UseWindowsService();
+
+// Serilog
 Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
     .WriteTo.File("Logs/log-.txt", rollingInterval: RollingInterval.Day)
@@ -17,54 +25,39 @@ Log.Logger = new LoggerConfiguration()
 
 builder.Host.UseSerilog();
 
+// Database
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlServer(
+        builder.Configuration.GetConnectionString("DefaultConnection")));
 
+// LOL Config
 builder.Services.Configure<LolServiceOptions>(
     builder.Configuration.GetSection("LOLService"));
 
+// Services
 builder.Services.AddSingleton<IServiceSoapClient, ServiceSoapClient>();
 builder.Services.AddSingleton<IInvioQueue, InvioQueue>();
 builder.Services.AddSingleton<IInvioQueueTracker, InvioQueueTracker>();
 builder.Services.AddHostedService<InvioProcessor>();
 builder.Services.AddHostedService<InvioWatcher>();
 builder.Services.AddScoped<ILogService, LogService>();
-
 builder.Services.AddSingleton<IRabbitPublisher, RabbitPublisher>();
 
+// RabbitMQ
 builder.Services.AddSingleton<IConnection>(sp =>
 {
-    var logger = sp.GetRequiredService<ILogger<Program>>();
+    var rabbit = builder.Configuration.GetSection("RabbitMQ");
 
     var factory = new ConnectionFactory()
     {
-        HostName = "rabbitmq",
-        UserName = "guest",
-        Password = "guest",
+        HostName = rabbit["Host"],
+        UserName = rabbit["User"],
+        Password = rabbit["Password"],
         DispatchConsumersAsync = true
     };
 
-    const int maxRetries = 10;
-    const int delayMs = 5000;
-
-    for (int attempt = 1; attempt <= maxRetries; attempt++)
-    {
-        try
-        {
-            logger.LogInformation("Tentativo di connessione a RabbitMQ (tentativo {Attempt})...", attempt);
-            return factory.CreateConnection();
-        }
-        catch (BrokerUnreachableException ex)
-        {
-            logger.LogWarning(ex, "Tentativo {Attempt} fallito. RabbitMQ non raggiungibile, retry in {Delay}s...", attempt, delayMs / 1000);
-            Thread.Sleep(delayMs);
-        }
-    }
-
-    throw new Exception("❌ Impossibile connettersi a RabbitMQ dopo vari tentativi.");
+    return factory.CreateConnection();
 });
-
-builder.Services.AddControllers();
 
 var app = builder.Build();
 

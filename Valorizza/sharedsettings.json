@@ -1,0 +1,22 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=localhost,1433;Database=_esB;User Id=es_user;Password=Password123!;TrustServerCertificate=True"
+  },
+
+  "RabbitMQ": {
+    "Host": "localhost",
+    "User": "guest",
+    "Password": "guest"
+  },
+
+  "LOLService": {
+    "Url": "https://cewebservices.posteitaliane.it/LOLGC/LolService.svc",
+    "SecurityMode": "Transport"
+  },
+  "Timers": {
+    "InvioWatcherSeconds": 120,
+    "ConfermaWatcherSeconds": 120,
+    "ValorizzaWatcherSeconds": 120,
+    "RecuperaDocumentoWatcherSeconds": 1800
+  }
+}

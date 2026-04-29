@@ -8,17 +8,18 @@ using SharedLib.Messaging;
 
 public class RecuperaDocumentoFinaleWatcher : BackgroundService
 {
+    private readonly IConfiguration _configuration;
     private readonly IServiceProvider _serviceProvider;
-    private readonly TimeSpan _delay = TimeSpan.FromHours(1); // ogni 1 ora
     private readonly ILogger<RecuperaDocumentoFinaleProcessor> _logger;
     private readonly IRecuperaDocumentoFinaleQueueTracker _tracker;
     private readonly IRabbitPublisher _publisher;
 
     private const string QUEUE_NAME = "recupera_documento_finale_lol_queue";
 
-    public RecuperaDocumentoFinaleWatcher(IServiceProvider serviceProvider, ILogger<RecuperaDocumentoFinaleProcessor> logger, IRecuperaDocumentoFinaleQueueTracker tracker,
+    public RecuperaDocumentoFinaleWatcher(IConfiguration configuration, IServiceProvider serviceProvider, ILogger<RecuperaDocumentoFinaleProcessor> logger, IRecuperaDocumentoFinaleQueueTracker tracker,
                         IRabbitPublisher publisher)
     {
+        _configuration = configuration;
         _serviceProvider = serviceProvider;
         _logger = logger;
         _tracker = tracker;
@@ -29,6 +30,7 @@ public class RecuperaDocumentoFinaleWatcher : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            var delay = _configuration.GetValue<int>("Timers:RecuperaDocumentoWatcherSeconds");
             try
             {
                 using var scope = _serviceProvider.CreateScope();
@@ -87,7 +89,7 @@ public class RecuperaDocumentoFinaleWatcher : BackgroundService
                 _logger.LogError(ex, "Errore nel processor RecuperaDocumentoFinaleWatcher.");
             }
 
-            await Task.Delay(_delay, stoppingToken);
+            await Task.Delay(TimeSpan.FromSeconds(delay), stoppingToken);
         }
     }
 }

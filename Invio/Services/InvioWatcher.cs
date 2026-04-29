@@ -8,19 +8,21 @@ using SharedLib.Messaging; // per IRabbitPublisher
 
 public class InvioWatcher : BackgroundService
 {
+    private readonly IConfiguration _configuration;
     private readonly IServiceProvider _serviceProvider;
-    private readonly TimeSpan _delay = TimeSpan.FromSeconds(5);
     private readonly ILogger<InvioProcessor> _logger;
     private readonly IInvioQueueTracker _tracker;
     private readonly IRabbitPublisher _publisher;
 
     private const string QUEUE_NAME = "invio_lol_queue";
 
-    public InvioWatcher(IServiceProvider serviceProvider,
+    public InvioWatcher(IConfiguration configuration,
+                        IServiceProvider serviceProvider,
                         ILogger<InvioProcessor> logger,
                         IInvioQueueTracker tracker,
                         IRabbitPublisher publisher)
     {
+        _configuration = configuration;
         _serviceProvider = serviceProvider;
         _logger = logger;
         _tracker = tracker;
@@ -31,6 +33,7 @@ public class InvioWatcher : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            var delay = _configuration.GetValue<int>("Timers:InvioWatcherSeconds");
             try
             {
                 using var scope = _serviceProvider.CreateScope();
@@ -84,7 +87,7 @@ public class InvioWatcher : BackgroundService
                 _logger.LogError(ex, "❌ Errore nel processor InvioWatcher.");
             }
 
-            await Task.Delay(_delay, stoppingToken);
+            await Task.Delay(TimeSpan.FromSeconds(delay), stoppingToken);
         }
     }
 }

@@ -8,17 +8,19 @@ using SharedLib.Messaging; // per IRabbitPublisher
 
 public class ConfermaWatcher : BackgroundService
 {
+    private readonly IConfiguration _configuration;
     private readonly IServiceProvider _serviceProvider;
-    private readonly TimeSpan _delay = TimeSpan.FromSeconds(20); // ogni 20 secondi
     private readonly ILogger<ConfermaProcessor> _logger;
     private readonly IConfermaQueueTracker _tracker;
     private readonly IRabbitPublisher _publisher;
 
     private const string QUEUE_NAME = "conferma_lol_queue";
 
-    public ConfermaWatcher(IServiceProvider serviceProvider, ILogger<ConfermaProcessor> logger, IConfermaQueueTracker tracker,
+    public ConfermaWatcher(IConfiguration configuration, 
+        IServiceProvider serviceProvider, ILogger<ConfermaProcessor> logger, IConfermaQueueTracker tracker,
                         IRabbitPublisher publisher)
     {
+        _configuration = configuration;
         _serviceProvider = serviceProvider;
         _logger = logger;
         _tracker = tracker;
@@ -29,6 +31,7 @@ public class ConfermaWatcher : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            var delay = _configuration.GetValue<int>("Timers:ConfermaWatcherSeconds");
             try
             {
                 using var scope = _serviceProvider.CreateScope();
@@ -82,7 +85,7 @@ public class ConfermaWatcher : BackgroundService
                 _logger.LogError(ex, "❌ Errore nel processor ConfermaWatcher.");
             }
 
-            await Task.Delay(_delay, stoppingToken);
+            await Task.Delay(TimeSpan.FromSeconds(delay), stoppingToken);
         }
     }
 }

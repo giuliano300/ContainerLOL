@@ -9,17 +9,18 @@ using SharedLib.Messaging;
 
 public class ValorizzaWatcher : BackgroundService
 {
+    private readonly IConfiguration _configuration;
     private readonly IServiceProvider _serviceProvider;
-    private readonly TimeSpan _delay = TimeSpan.FromSeconds(20);
     private readonly ILogger<ValorizzaProcessor> _logger;
     private readonly IValorizzaQueueTracker _tracker;
     private readonly IRabbitPublisher _publisher;
 
     private const string QUEUE_NAME = "valorizza_lol_queue";
 
-    public ValorizzaWatcher(IServiceProvider serviceProvider, ILogger<ValorizzaProcessor> logger, IValorizzaQueueTracker tracker,
+    public ValorizzaWatcher(IConfiguration configuration, IServiceProvider serviceProvider, ILogger<ValorizzaProcessor> logger, IValorizzaQueueTracker tracker,
                         IRabbitPublisher publisher)
     {
+        _configuration = configuration;
         _serviceProvider = serviceProvider;
         _logger = logger;
         _tracker = tracker;
@@ -30,6 +31,7 @@ public class ValorizzaWatcher : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            var delay = _configuration.GetValue<int>("Timers:ValorizzaWatcherSeconds");
             try
             {
                 using var scope = _serviceProvider.CreateScope();
@@ -83,7 +85,7 @@ public class ValorizzaWatcher : BackgroundService
                 _logger.LogError(ex, "❌ Errore nel processor ValorizzaWatcher.");
             }
 
-            await Task.Delay(_delay, stoppingToken);
+            await Task.Delay(TimeSpan.FromSeconds(delay), stoppingToken);
         }
     }
 }
