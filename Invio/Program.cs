@@ -1,7 +1,6 @@
 ﻿using Invio.Services;
 using Microsoft.EntityFrameworkCore;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Exceptions;
 using Serilog;
 using SharedLib.Config;
 using SharedLib.Db;
@@ -53,7 +52,9 @@ builder.Services.AddSingleton<IConnection>(sp =>
         HostName = rabbit["Host"],
         UserName = rabbit["User"],
         Password = rabbit["Password"],
-        DispatchConsumersAsync = true
+        DispatchConsumersAsync = true,
+        AutomaticRecoveryEnabled = true,
+        NetworkRecoveryInterval = TimeSpan.FromSeconds(30)
     };
 
     return factory.CreateConnection();

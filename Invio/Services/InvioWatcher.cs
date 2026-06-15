@@ -40,7 +40,6 @@ public class InvioWatcher : BackgroundService
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
                 var newRecipients = await db.Recipients
-                    .Include(r => r.Operations)
                     .Where(r =>
                         r.CurrentState == (int)CurrentState.inAttesa &&
                         r.Valid &&

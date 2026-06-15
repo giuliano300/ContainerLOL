@@ -5,8 +5,8 @@ using RabbitMQ.Client.Exceptions;
 using Serilog;
 using SharedLib.Config;
 using SharedLib.Db;
-using SharedLib.Services;
 using SharedLib.Messaging;
+using SharedLib.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -55,7 +55,9 @@ builder.Services.AddSingleton<IConnection>(sp =>
         HostName = rabbit["Host"],
         UserName = rabbit["User"],
         Password = rabbit["Password"],
-        DispatchConsumersAsync = true
+        DispatchConsumersAsync = true,
+        AutomaticRecoveryEnabled = true,
+        NetworkRecoveryInterval = TimeSpan.FromSeconds(30)
     };
 
     const int maxRetries = 10;

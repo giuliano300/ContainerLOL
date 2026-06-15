@@ -46,6 +46,11 @@ public class ValorizzaProcessor : BackgroundService
     {
         _channel.QueueDeclare(queue: QueueName, durable: true, exclusive: false, autoDelete: false);
 
+        _channel.BasicQos(
+            prefetchSize: 0,
+            prefetchCount: 1,
+            global: false);
+
         var consumer = new AsyncEventingBasicConsumer(_channel);
         consumer.Received += async (model, ea) =>
         {
@@ -112,11 +117,25 @@ public class ValorizzaProcessor : BackgroundService
                 return;
             }
 
+            if (n.CurrentState != (int)CurrentState.accettatoOnline)
+            {
+                _logger.LogWarning(
+                    "Recipient {Id} non pronto per la richiesta. Stato attuale: {State}",
+                    n.Id,
+                    n.CurrentState);
+
+                n.InProcessStep4 = false;
+                n.worked = true;
+                await db.SaveChangesAsync(stoppingToken);
+
+                return;
+            }
+
             var user = n.Operations.Users;
             if (user == null)
             {
                 _logger.LogError("Utente non trovato per il destinatario n." + n.Id);
-                await MarkAsFailed(n, "Utente non trovato per il destinatario n." + n.Id, stoppingToken);
+                await MarkAsFailed(db, n, "Utente non trovato per il destinatario n." + n.Id, stoppingToken);
                 return;
             }
 
@@ -124,7 +143,7 @@ public class ValorizzaProcessor : BackgroundService
             if (service == null)
             {
                 _logger.LogError("Service non creato per l'utente n." + user.Id);
-                await MarkAsFailed(n, "Service non creato per l'utente n." + user.Id, stoppingToken);
+                await MarkAsFailed(db,      n, "Service non creato per l'utente n." + user.Id, stoppingToken);
                 return;
             }
 
@@ -178,7 +197,7 @@ public class ValorizzaProcessor : BackgroundService
             catch (Exception e)
             {
                 message = e.Message;
-                await MarkAsFailed(n, message, stoppingToken);
+                await MarkAsFailed(db, n, message, stoppingToken);
                 return;
             }
 
@@ -226,16 +245,15 @@ public class ValorizzaProcessor : BackgroundService
         }
     }
 
-    private async Task MarkAsFailed(Recipients n, string msg, CancellationToken token)
+    private async Task MarkAsFailed(AppDbContext db, Recipients n, string msg, CancellationToken token)
     {
-        n.InProcessStep2 = false;
+        n.InProcessStep1 = false;
         n.worked = true;
         n.CurrentState = (int)CurrentState.ErroreGenerico;
         n.Message = msg;
         n.Valid = false;
 
         using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
         db.RecipientWorks.Add(new RecipientWorks
         {
@@ -248,6 +266,5 @@ public class ValorizzaProcessor : BackgroundService
         await db.SaveChangesAsync(token);
         _tracker.Untrack(n.Id);
     }
-
 
 }

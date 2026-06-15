@@ -44,6 +44,11 @@ public class ConfermaProcessor : BackgroundService
     {
         _channel.QueueDeclare(queue: QueueName, durable: true, exclusive: false, autoDelete: false);
 
+        _channel.BasicQos(
+            prefetchSize: 0,
+            prefetchCount: 1,
+            global: false);
+
         var consumer = new AsyncEventingBasicConsumer(_channel);
         consumer.Received += async (model, ea) =>
         {
@@ -101,12 +106,25 @@ public class ConfermaProcessor : BackgroundService
         {
             var n = await db.Recipients
                 .Include(x => x.Operations).ThenInclude(o => o.Users)
-                .Include(x => x.Operations).ThenInclude(o => o.Senders)
                 .FirstOrDefaultAsync(x => x.Id == item.NameId, stoppingToken);
 
             if (n == null)
             {
                 _logger.LogError("Recipient non trovato.");
+                return;
+            }
+
+            if (n.CurrentState != (int)CurrentState.documentoValidato)
+            {
+                _logger.LogWarning(
+                    "Recipient {Id} già processato. Stato attuale: {State}",
+                    n.Id,
+                    n.CurrentState);
+
+                n.InProcessStep3 = false;
+                n.worked = true;
+                await db.SaveChangesAsync(stoppingToken);
+
                 return;
             }
 

@@ -44,6 +44,11 @@ public class RecuperaDocumentoFinaleProcessor : BackgroundService
     {
         _channel.QueueDeclare(queue: QueueName, durable: true, exclusive: false, autoDelete: false);
 
+        _channel.BasicQos(
+            prefetchSize: 0,
+            prefetchCount: 1,
+            global: false);
+
         var consumer = new AsyncEventingBasicConsumer(_channel);
         consumer.Received += async (model, ea) =>
         {
@@ -103,6 +108,20 @@ public class RecuperaDocumentoFinaleProcessor : BackgroundService
         if (n == null)
         {
             _logger.LogError("Recipient non trovato.");
+            return;
+        }
+
+        if (n.CurrentState != (int)CurrentState.presaInCarico)
+        {
+            _logger.LogWarning(
+                "Recipient {Id} già processato. Stato attuale: {State}",
+                n.Id,
+                n.CurrentState);
+
+            n.InProcessStep4 = false;
+            n.worked = true;
+            await db.SaveChangesAsync(stoppingToken);
+
             return;
         }
 

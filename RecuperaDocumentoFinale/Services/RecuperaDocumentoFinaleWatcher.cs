@@ -37,7 +37,6 @@ public class RecuperaDocumentoFinaleWatcher : BackgroundService
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
                 var newRecipients = await db.Recipients
-                    .Include(r => r.Operations)
                     .Where(r =>
                         r.CurrentState == (int)CurrentState.presaInCarico &&
                         r.Valid &&
@@ -51,7 +50,7 @@ public class RecuperaDocumentoFinaleWatcher : BackgroundService
                         )
                         && r.InProcessStep4 != true
                      )
-                    .Take(500)
+                    .Take(50)
                     .ToListAsync(stoppingToken);
 
                 var recipientsToPublish = new List<ConfermaItem>();

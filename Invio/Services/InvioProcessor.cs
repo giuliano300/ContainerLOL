@@ -44,6 +44,11 @@ public class InvioProcessor : BackgroundService
     {
         _channel.QueueDeclare(queue: QueueName, durable: true, exclusive: false, autoDelete: false);
 
+        _channel.BasicQos(
+            prefetchSize: 0,
+            prefetchCount: 1,
+            global: false);
+
         var consumer = new AsyncEventingBasicConsumer(_channel);
         consumer.Received += async (model, ea) =>
         {
@@ -105,11 +110,31 @@ public class InvioProcessor : BackgroundService
                 .Include(x => x.Bulletins)
                 .FirstOrDefaultAsync(x => x.Id == item.NameId, stoppingToken);
 
+            if (n == null)
+            {
+                _logger.LogError("Recipient non trovato.");
+                return;
+            }
+
+            if (n.CurrentState != (int)CurrentState.inAttesa)
+            {
+                _logger.LogWarning(
+                    "Recipient {Id} già processato. Stato attuale: {State}",
+                    n.Id,
+                    n.CurrentState);
+
+                n.InProcessStep1 = false;
+                n.worked = true;
+                await db.SaveChangesAsync(stoppingToken);
+
+                return;
+            }
+
             var user = n.Operations.Users;
             if (user == null)
             {
                 _logger.LogWarning("Utente non trovato per il destinatario n. {Id}", n.Id);
-                await MarkAsFailed(n, "Utente non trovato per il destinatario n." + n.Id, stoppingToken);
+                await MarkAsFailed(db, n, "Utente non trovato per il destinatario n." + n.Id, stoppingToken);
                 return;
             }
 
@@ -117,7 +142,7 @@ public class InvioProcessor : BackgroundService
             if (service == null)
             {
                 _logger.LogWarning("Service non creato per l'utente n. {UserId}", user.Id);
-                await MarkAsFailed(n, "Service non creato per l'utente n. " + n.Id, stoppingToken);
+                await MarkAsFailed(db, n, "Service non creato per l'utente n. " + n.Id, stoppingToken);
                 return;
             }
 
@@ -125,7 +150,7 @@ public class InvioProcessor : BackgroundService
             if (requestId == null)
             {
                 _logger.LogWarning("RequestId non ottenuto.");
-                await MarkAsFailed(n, "RequestId non ottenuto", stoppingToken);
+                await MarkAsFailed(db, n, "RequestId non ottenuto", stoppingToken);
                 return;
             }
 
@@ -133,7 +158,7 @@ public class InvioProcessor : BackgroundService
             if (sender == null)
             {
                 _logger.LogWarning("Mittente non trovato per il destinatario n. {Id}", n.Id);
-                await MarkAsFailed(n, "Mittente non trovato per il destinatario n." + n.Id, stoppingToken);
+                await MarkAsFailed(db, n, "Mittente non trovato per il destinatario n." + n.Id, stoppingToken);
                 return;
             }
 
@@ -206,7 +231,7 @@ public class InvioProcessor : BackgroundService
         _logger.LogInformation("🔓 Untrack completato per recipient ID {Id}", item.NameId);
     }
 
-    private async Task MarkAsFailed(Recipients n, string msg, CancellationToken token)
+    private async Task MarkAsFailed(AppDbContext db, Recipients n, string msg, CancellationToken token)
     {
         n.InProcessStep1 = false;
         n.worked = true;
@@ -215,7 +240,6 @@ public class InvioProcessor : BackgroundService
         n.Valid = false;
 
         using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
         db.RecipientWorks.Add(new RecipientWorks
         {
