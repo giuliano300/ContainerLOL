@@ -30,13 +30,17 @@ public class RecuperaDocumentoFinaleWatcher : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            // Read the polling interval on every loop so configuration reloads can adjust scheduling.
             var delay = _configuration.GetValue<int>("Timers:RecuperaDocumentoWatcherSeconds");
             try
             {
+                // Create a fresh scope for each polling cycle to keep DbContext lifetime short.
                 using var scope = _serviceProvider.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+                // Select only the columns needed to queue document retrieval; tracking full recipients is unnecessary here.
                 var newRecipients = await db.Recipients
+                    .AsNoTracking()
                     .Where(r =>
                         r.CurrentState == (int)CurrentState.presaInCarico &&
                         r.Valid &&
@@ -50,6 +54,7 @@ public class RecuperaDocumentoFinaleWatcher : BackgroundService
                         )
                         && r.InProcessStep4 != true
                      )
+                    .Select(r => new { r.Id, r.RequestId })
                     .Take(50)
                     .ToListAsync(stoppingToken);
 
@@ -57,29 +62,27 @@ public class RecuperaDocumentoFinaleWatcher : BackgroundService
 
                 foreach (var r in newRecipients)
                 {
+                    // The in-memory tracker avoids duplicate queueing inside this running service instance.
                     if (!_tracker.TryTrack(r.Id))
                     {
                         _logger.LogInformation($"Recipient {r.Id} già in coda per invio. Skippato.");
                         continue;
                     }
 
-                    r.InProcessStep4 = true;
-                    r.worked = false;
-
-                    db.RecipientWorks.Add(new RecipientWorks
-                    {
-                        Message = "Inserito in coda recupera documento finale",
-                        RecipientId = r.Id,
-                        WorkDate = DateTime.UtcNow,
-                        WorkStatus = (int)WorkStatus.InCodaRecuperaDocumentoFinale
-                    });
+                    // Attach a stub entity so only queue flags are updated, not the whole recipient row.
+                    var recipient = new Recipients { Id = r.Id };
+                    db.Recipients.Attach(recipient);
+                    RecipientWorkflowHelper.MarkQueued(db, recipient, LolWorkflowStep.RecuperaDocumentoFinale);
+                    db.Entry(recipient).Property(x => x.InProcessStep4).IsModified = true;
+                    db.Entry(recipient).Property(x => x.worked).IsModified = true;
 
                     recipientsToPublish.Add(new ConfermaItem { NameId = r.Id, RequesId = r.RequestId! });
                 }
 
+                // Persist queue flags and audit rows before emitting RabbitMQ messages.
                 await db.SaveChangesAsync(stoppingToken);
 
-                // 📤 Poi pubblichi su RabbitMQ
+                // Publish only after the database state says these recipients are queued.
                 foreach (var item in recipientsToPublish)
                     await _publisher.PublishAsync(QUEUE_NAME, item);
             }
@@ -88,6 +91,7 @@ public class RecuperaDocumentoFinaleWatcher : BackgroundService
                 _logger.LogError(ex, "Errore nel processor RecuperaDocumentoFinaleWatcher.");
             }
 
+            // Wait until the next polling cycle unless the service is stopping.
             await Task.Delay(TimeSpan.FromSeconds(delay), stoppingToken);
         }
     }

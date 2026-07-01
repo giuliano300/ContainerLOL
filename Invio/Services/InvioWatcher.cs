@@ -33,13 +33,17 @@ public class InvioWatcher : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
+            // Read the polling interval on every loop so configuration reloads can adjust scheduling.
             var delay = _configuration.GetValue<int>("Timers:InvioWatcherSeconds");
             try
             {
+                // Create a fresh scope for each polling cycle to keep DbContext lifetime short.
                 using var scope = _serviceProvider.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+                // Select only the columns needed to queue invio work; tracking full recipients is unnecessary here.
                 var newRecipients = await db.Recipients
+                    .AsNoTracking()
                     .Where(r =>
                         r.CurrentState == (int)CurrentState.inAttesa &&
                         r.Valid &&
@@ -48,6 +52,7 @@ public class InvioWatcher : BackgroundService
                         r.Format == (int)FormatType.A4 &&
                         r.InProcessStep1 != true)
                     .OrderBy(r => r.Id)
+                    .Select(r => new { r.Id })
                     .Take(20)
                     .ToListAsync(stoppingToken);
 
@@ -55,29 +60,27 @@ public class InvioWatcher : BackgroundService
 
                 foreach (var r in newRecipients)
                 {
+                    // The in-memory tracker avoids duplicate queueing inside this running service instance.
                     if (!_tracker.TryTrack(r.Id))
                     {
                         _logger.LogInformation($"Recipient {r.Id} già in coda per invio. Skippato.");
                         continue;
                     }
 
-                    r.InProcessStep1 = true;
-                    r.worked = false;
-
-                    db.RecipientWorks.Add(new RecipientWorks
-                    {
-                        Message = "Inserito in coda invio",
-                        RecipientId = r.Id,
-                        WorkDate = DateTime.UtcNow,
-                        WorkStatus = (int)WorkStatus.InCodaInvio
-                    });
+                    // Attach a stub entity so only queue flags are updated, not the whole recipient row.
+                    var recipient = new Recipients { Id = r.Id };
+                    db.Recipients.Attach(recipient);
+                    RecipientWorkflowHelper.MarkQueued(db, recipient, LolWorkflowStep.Invio);
+                    db.Entry(recipient).Property(x => x.InProcessStep1).IsModified = true;
+                    db.Entry(recipient).Property(x => x.worked).IsModified = true;
 
                     recipientsToPublish.Add(new InvioItem { NameId = r.Id });
                 }
 
+                // Persist queue flags and audit rows before emitting RabbitMQ messages.
                 await db.SaveChangesAsync(stoppingToken);
 
-                // 📤 Poi pubblichi su RabbitMQ
+                // Publish only after the database state says these recipients are queued.
                 foreach (var item in recipientsToPublish)
                     await _publisher.PublishAsync(QUEUE_NAME, item);
             }
@@ -86,6 +89,7 @@ public class InvioWatcher : BackgroundService
                 _logger.LogError(ex, "❌ Errore nel processor InvioWatcher.");
             }
 
+            // Wait until the next polling cycle unless the service is stopping.
             await Task.Delay(TimeSpan.FromSeconds(delay), stoppingToken);
         }
     }

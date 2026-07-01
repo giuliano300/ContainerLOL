@@ -7,10 +7,9 @@ using Microsoft.Extensions.Options;
 using SharedLib.Config;
 using SharedLib.WsdlModels;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
-using System.Text;
 using Newtonsoft.Json;
 using System.Threading;
+using SharedLib.Messaging;
 
 namespace Valorizza.Services;
 
@@ -27,6 +26,9 @@ public class ValorizzaProcessor : BackgroundService
 
     private const string QueueName = "valorizza_lol_queue";
 
+    /// <summary>
+    /// Builds the valorizza background processor with its database, RabbitMQ and tracking dependencies.
+    /// </summary>
     public ValorizzaProcessor(
         IServiceScopeFactory scopeFactory,
         IOptions<LolServiceOptions> options,
@@ -42,63 +44,25 @@ public class ValorizzaProcessor : BackgroundService
         _channel = _connection.CreateModel();
     }
 
+    /// <summary>
+    /// Starts the RabbitMQ consumer that dispatches valorizza messages one at a time.
+    /// </summary>
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _channel.QueueDeclare(queue: QueueName, durable: true, exclusive: false, autoDelete: false);
-
-        _channel.BasicQos(
-            prefetchSize: 0,
-            prefetchCount: 1,
-            global: false);
-
-        var consumer = new AsyncEventingBasicConsumer(_channel);
-        consumer.Received += async (model, ea) =>
-        {
-            var acquired = await _semaphore.WaitAsync(0, stoppingToken);
-            if (!acquired)
-            {
-                _logger.LogWarning("⚠️ Processo già in esecuzione. Skip del messaggio.");
-                _channel.BasicNack(ea.DeliveryTag, false, requeue: true); // rimanda il messaggio in coda
-                return;
-            }
-
-            try
-            {
-                var body = ea.Body.ToArray();
-                var json = Encoding.UTF8.GetString(body);
-
-                ValorizzaItem? item;
-                try
-                {
-                    item = JsonConvert.DeserializeObject<ValorizzaItem>(json);
-                    if (item == null)
-                    {
-                        _logger.LogWarning("Messaggio non valido: {Json}", json);
-                        _channel.BasicAck(ea.DeliveryTag, false);
-                        return;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Errore nella deserializzazione del messaggio RabbitMQ.");
-                    _channel.BasicAck(ea.DeliveryTag, false);
-                    return;
-                }
-
-                await ProcessItemAsync(item, stoppingToken);
-                _channel.BasicAck(ea.DeliveryTag, false);
-            }
-            finally
-            {
-                _semaphore.Release();
-            }
-        };
-
-        _channel.BasicConsume(queue: QueueName, autoAck: false, consumer: consumer);
-
-        return Task.CompletedTask;
+        // RabbitConsumerHelper centralizes queue declaration, ack/nack, deserialization errors and local serialization.
+        return RabbitConsumerHelper.StartSingleMessageConsumerAsync(
+            _channel,
+            _semaphore,
+            QueueName,
+            _logger,
+            JsonConvert.DeserializeObject<ValorizzaItem>,
+            ProcessItemAsync,
+            stoppingToken);
     }
 
+    /// <summary>
+    /// Loads the recipient and executes one valorizza polling attempt.
+    /// </summary>
     private async Task ProcessItemAsync(ValorizzaItem item, CancellationToken stoppingToken)
     {
         using var scope = _scopeFactory.CreateScope();
@@ -106,9 +70,9 @@ public class ValorizzaProcessor : BackgroundService
 
         try
         {
+            // Load the recipient and operation data required for one valorizza polling attempt.
             var n = await db.Recipients
                 .Include(x => x.Operations).ThenInclude(o => o.Users)
-                .Include(x => x.Operations).ThenInclude(o => o.Senders)
                 .FirstOrDefaultAsync(x => x.Id == item.NameId, stoppingToken);
 
             if (n == null)
@@ -119,18 +83,19 @@ public class ValorizzaProcessor : BackgroundService
 
             if (n.CurrentState != (int)CurrentState.accettatoOnline)
             {
+                // The recipient is no longer eligible for valorizza; release the valorizza step flag.
                 _logger.LogWarning(
                     "Recipient {Id} non pronto per la richiesta. Stato attuale: {State}",
                     n.Id,
                     n.CurrentState);
 
-                n.InProcessStep4 = false;
-                n.worked = true;
+                RecipientWorkflowHelper.ReleaseStep(n, LolWorkflowStep.Valorizza);
                 await db.SaveChangesAsync(stoppingToken);
 
                 return;
             }
 
+            // Poste credentials are stored on the operation user.
             var user = n.Operations.Users;
             if (user == null)
             {
@@ -139,17 +104,25 @@ public class ValorizzaProcessor : BackgroundService
                 return;
             }
 
+            // Valorizza is polling, so it intentionally does not use PosteCallClaims.
+            if (LolWorkflowContracts.GetMode(LolWorkflowStep.Valorizza) != LolWorkflowMode.Polling)
+            {
+                throw new InvalidOperationException("Il contratto Valorizza deve restare polling.");
+            }
+
             var service = LOLServiceHelper.GetNewServiceLOL(user, _options);
             if (service == null)
             {
                 _logger.LogError("Service non creato per l'utente n." + user.Id);
-                await MarkAsFailed(db,      n, "Service non creato per l'utente n." + user.Id, stoppingToken);
+                await MarkAsFailed(db, n, "Service non creato per l'utente n." + user.Id, stoppingToken);
                 return;
             }
 
             var richiesta = new[] { new Richiesta { IDRichiesta = n.RequestId } };
+            // This Poste call is allowed to run multiple times until a final valuation state is returned.
             var v = await service.ValorizzaAsync(richiesta);
 
+            // Count response rows with states that are meaningful for the valuation workflow.
             var st = v.ValorizzaResult.ServizioEnquiryResponse
                 .Count(a => new[] { "N", "Y", "J", "G", "R", "A", "U", "V", "W", "S", "L" }
                 .Contains(a.StatoLavorazione.Id));
@@ -159,6 +132,7 @@ public class ValorizzaProcessor : BackgroundService
             {
                 if (st > 0)
                 {
+                    // A meaningful response resets the retry counter.
                     n.TentativiValorizzazione = 0;
                     var s = v.ValorizzaResult.ServizioEnquiryResponse.FirstOrDefault();
                     if (s != null)
@@ -167,6 +141,7 @@ public class ValorizzaProcessor : BackgroundService
 
                         if (s.StatoLavorazione.Id is "R" or "L")
                         {
+                            // R/L are considered valid document states for the next conferma step.
                             n.CurrentState = (int)CurrentState.documentoValidato;
                             n.Price = Convert.ToDecimal(s.Totale.ImportoNetto);
                             n.VatPrice = Convert.ToDecimal(s.Totale.ImportoIva);
@@ -175,6 +150,7 @@ public class ValorizzaProcessor : BackgroundService
                         }
                         else
                         {
+                            // Any other meaningful state is a validation error for this recipient.
                             n.CurrentState = (int)CurrentState.ErroreValidazione;
                             n.Valid = false;
                         }
@@ -182,6 +158,7 @@ public class ValorizzaProcessor : BackgroundService
                 }
                 else
                 {
+                    // No meaningful response: keep polling until the configured attempt limit is reached.
                     message = "Valorizzazione non ancora disponibile";
                     n.TentativiValorizzazione++;
                     if (n.TentativiValorizzazione >= 3)
@@ -201,17 +178,10 @@ public class ValorizzaProcessor : BackgroundService
                 return;
             }
 
+            // Release the step and record the audit row after this polling attempt completes.
             n.Message = message;
-            n.worked = true;
-            n.InProcessStep2 = false;
-
-            db.RecipientWorks.Add(new RecipientWorks
-            {
-                Message = message,
-                RecipientId = n.Id,
-                WorkDate = DateTime.UtcNow,
-                WorkStatus = (int)WorkStatus.InviatoValorizza
-            });
+            RecipientWorkflowHelper.ReleaseStep(n, LolWorkflowStep.Valorizza);
+            RecipientWorkflowHelper.AddProcessedWork(db, n.Id, LolWorkflowStep.Valorizza, message);
 
             await db.SaveChangesAsync(stoppingToken);
         }
@@ -222,21 +192,13 @@ public class ValorizzaProcessor : BackgroundService
             var n = await db.Recipients.FirstOrDefaultAsync(x => x.Id == item.NameId, stoppingToken);
             if (n != null)
             {
-                n.CurrentState = (int)CurrentState.ErroreGenerico;
-                n.Message = ex.Message;
-                n.Valid = false;
-                n.InProcessStep2 = false;
-                n.worked = true;
-
-                db.RecipientWorks.Add(new RecipientWorks
-                {
-                    Message = ex.Message,
-                    RecipientId = n.Id,
-                    WorkDate = DateTime.UtcNow,
-                    WorkStatus = (int)WorkStatus.InviatoValorizza
-                });
-
-                await db.SaveChangesAsync(stoppingToken);
+                // Failure paths must release the valorizza step so external recovery can decide the next action.
+                await RecipientWorkflowHelper.MarkAsFailedAsync(
+                    db,
+                    n,
+                    LolWorkflowStep.Valorizza,
+                    ex.Message,
+                    stoppingToken);
             }
         }
         finally
@@ -245,26 +207,13 @@ public class ValorizzaProcessor : BackgroundService
         }
     }
 
+    /// <summary>
+    /// Marks a valorizza recipient as failed and records the failure in the work audit.
+    /// </summary>
     private async Task MarkAsFailed(AppDbContext db, Recipients n, string msg, CancellationToken token)
     {
-        n.InProcessStep1 = false;
-        n.worked = true;
-        n.CurrentState = (int)CurrentState.ErroreGenerico;
-        n.Message = msg;
-        n.Valid = false;
-
-        using var scope = _scopeFactory.CreateScope();
-
-        db.RecipientWorks.Add(new RecipientWorks
-        {
-            Message = msg,
-            RecipientId = n.Id,
-            WorkDate = DateTime.UtcNow,
-            WorkStatus = (int)WorkStatus.InviatoPoste
-        });
-
-        await db.SaveChangesAsync(token);
-        _tracker.Untrack(n.Id);
+        // MarkAsFailed belongs to the valorizza step, so it must release InProcessStep2.
+        await RecipientWorkflowHelper.MarkAsFailedAsync(db, n, LolWorkflowStep.Valorizza, msg, token);
     }
 
 }

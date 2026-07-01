@@ -2,13 +2,12 @@
 using Microsoft.Extensions.Options;
 using RecuperaDocumentoFinale.Services;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
 using SharedLib.Config;
 using SharedLib.Db;
+using SharedLib.Messaging;
 using SharedLib.Models;
 using SharedLib.Utils;
 using SharedLib.WsdlModels;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 
@@ -25,6 +24,9 @@ public class RecuperaDocumentoFinaleProcessor : BackgroundService
 
     private const string QueueName = "recupera_documento_finale_lol_queue";
 
+    /// <summary>
+    /// Builds the final-document background processor with its database, RabbitMQ and tracking dependencies.
+    /// </summary>
     public RecuperaDocumentoFinaleProcessor(
         IServiceScopeFactory scopeFactory,
         IOptions<LolServiceOptions> options,
@@ -40,112 +42,97 @@ public class RecuperaDocumentoFinaleProcessor : BackgroundService
         _channel = _connection.CreateModel();
     }
 
+    /// <summary>
+    /// Starts the RabbitMQ consumer that dispatches final-document messages one at a time.
+    /// </summary>
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _channel.QueueDeclare(queue: QueueName, durable: true, exclusive: false, autoDelete: false);
-
-        _channel.BasicQos(
-            prefetchSize: 0,
-            prefetchCount: 1,
-            global: false);
-
-        var consumer = new AsyncEventingBasicConsumer(_channel);
-        consumer.Received += async (model, ea) =>
-        {
-            var acquired = await _semaphore.WaitAsync(0, stoppingToken);
-            if (!acquired)
-            {
-                _logger.LogWarning("⚠️ Processo già in esecuzione. Skip del messaggio.");
-                _channel.BasicNack(ea.DeliveryTag, false, requeue: true); // rimanda il messaggio in coda
-                return;
-            }
-
-            try
-            {
-                var body = ea.Body.ToArray();
-                var json = Encoding.UTF8.GetString(body);
-
-                ConfermaItem? item = null;
-                try
-                {
-                    item = JsonSerializer.Deserialize<ConfermaItem>(json);
-                    if (item == null)
-                    {
-                        _logger.LogWarning("Messaggio non valido: {Json}", json);
-                        _channel.BasicAck(ea.DeliveryTag, false);
-                        return;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Errore nella deserializzazione del messaggio RabbitMQ.");
-                    _channel.BasicAck(ea.DeliveryTag, false);
-                    return;
-                }
-
-                await ProcessItemAsync(item, stoppingToken);
-                _channel.BasicAck(ea.DeliveryTag, false);
-            }
-            finally
-            {
-                _semaphore.Release();
-            }
-        };
-
-        _channel.BasicConsume(queue: QueueName, autoAck: false, consumer: consumer);
-        return Task.CompletedTask;
+        // RabbitConsumerHelper centralizes queue declaration, ack/nack, deserialization errors and local serialization.
+        return RabbitConsumerHelper.StartSingleMessageConsumerAsync<ConfermaItem>(
+            _channel,
+            _semaphore,
+            QueueName,
+            _logger,
+            json => JsonSerializer.Deserialize<ConfermaItem>(json),
+            ProcessItemAsync,
+            stoppingToken);
     }
 
+    /// <summary>
+    /// Loads the recipient and executes one final-document recovery attempt.
+    /// </summary>
     private async Task ProcessItemAsync(ConfermaItem item, CancellationToken stoppingToken)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        var n = await db.Recipients
-            .Include(x => x.Operations).ThenInclude(o => o.Users)
-            .FirstOrDefaultAsync(x => x.Id == item.NameId, stoppingToken);
-
-        if (n == null)
-        {
-            _logger.LogError("Recipient non trovato.");
-            return;
-        }
-
-        if (n.CurrentState != (int)CurrentState.presaInCarico)
-        {
-            _logger.LogWarning(
-                "Recipient {Id} già processato. Stato attuale: {State}",
-                n.Id,
-                n.CurrentState);
-
-            n.InProcessStep4 = false;
-            n.worked = true;
-            await db.SaveChangesAsync(stoppingToken);
-
-            return;
-        }
-
         try
         {
-            var user = n.Operations.Users;
-            var service = LOLServiceHelper.GetNewServiceLOL(user, _options);
+            // Load only the user credentials needed for the final-document Poste call.
+            var n = await db.Recipients
+                .Include(x => x.Operations).ThenInclude(o => o.Users)
+                .FirstOrDefaultAsync(x => x.Id == item.NameId, stoppingToken);
 
+            if (n == null)
+            {
+                _logger.LogError("Recipient non trovato.");
+                return;
+            }
+
+            if (n.CurrentState != (int)CurrentState.presaInCarico)
+            {
+                // The recipient is no longer eligible for document recovery; release the step flag.
+                _logger.LogWarning(
+                    "Recipient {Id} già processato. Stato attuale: {State}",
+                    n.Id,
+                    n.CurrentState);
+
+                RecipientWorkflowHelper.ReleaseStep(n, LolWorkflowStep.RecuperaDocumentoFinale);
+                await db.SaveChangesAsync(stoppingToken);
+
+                return;
+            }
+
+            // Poste credentials are stored on the operation user.
+            var user = n.Operations.Users;
+            if (user == null)
+            {
+                _logger.LogWarning("Utente non trovato per il destinatario n. {Id}", n.Id);
+                await MarkAsFailedAsync(db, n, "Utente non trovato per il destinatario n." + n.Id, stoppingToken);
+                return;
+            }
+
+            // Document recovery is intentionally outside PosteCallClaims because it can be retried.
+            if (LolWorkflowContracts.GetMode(LolWorkflowStep.RecuperaDocumentoFinale) != LolWorkflowMode.Retryable)
+            {
+                throw new InvalidOperationException("Il contratto RecuperaDocumentoFinale deve restare retryable.");
+            }
+
+            var service = LOLServiceHelper.GetNewServiceLOL(user, _options);
+            if (service == null)
+            {
+                _logger.LogWarning("Service non creato per l'utente n. {UserId}", user.Id);
+                await MarkAsFailedAsync(db, n, "Service non creato per l'utente n. " + user.Id, stoppingToken);
+                return;
+            }
+
+            // This Poste call is allowed to run more than once until the final document is available.
             var dcs = await service.RecuperaDocumentoFinaleAsync(n.Code);
             var result = dcs.RecuperaDocumentoFinaleResult;
 
             if (result.CEResult.Type == "I")
-                n.PathRecoveryFile = Convert.ToBase64String(result.Documento.Contenuto);
-
-            db.RecipientWorks.Add(new RecipientWorks
             {
-                Message = result.CEResult.Description,
-                RecipientId = n.Id,
-                WorkDate = DateTime.UtcNow,
-                WorkStatus = (int)WorkStatus.InviatoRecuperaDocumentoFinale
-            });
+                // Store the recovered document content only when Poste returns a successful result.
+                n.PathRecoveryFile = Convert.ToBase64String(result.Documento.Contenuto);
+            }
 
-            n.worked = true;
-            n.InProcessStep4 = false;
+            n.Message = result.CEResult.Description;
+            RecipientWorkflowHelper.ReleaseStep(n, LolWorkflowStep.RecuperaDocumentoFinale);
+            RecipientWorkflowHelper.AddProcessedWork(
+                db,
+                n.Id,
+                LolWorkflowStep.RecuperaDocumentoFinale,
+                result.CEResult.Description);
 
             await db.SaveChangesAsync(stoppingToken);
         }
@@ -153,17 +140,32 @@ public class RecuperaDocumentoFinaleProcessor : BackgroundService
         {
             _logger.LogError(ex, "Errore durante il recupero documento finale");
 
-            db.RecipientWorks.Add(new RecipientWorks
+            var n = await db.Recipients.FirstOrDefaultAsync(x => x.Id == item.NameId, stoppingToken);
+            if (n != null)
             {
-                Message = ex.Message,
-                RecipientId = n.Id,
-                WorkDate = DateTime.UtcNow,
-                WorkStatus = (int)WorkStatus.InviatoRecuperaDocumentoFinale
-            });
-
-            await db.SaveChangesAsync(stoppingToken);
+                // Failure paths release the step so the watcher can decide whether to retry later.
+                await MarkAsFailedAsync(db, n, ex.Message, stoppingToken);
+            }
         }
+        finally
+        {
+            _tracker.Untrack(item.NameId);
+        }
+    }
 
-        _tracker.Untrack(n.Id);
+    /// <summary>
+    /// Releases a final-document recipient after a failed attempt and records the failure in the work audit.
+    /// </summary>
+    private static async Task MarkAsFailedAsync(AppDbContext db, Recipients n, string msg, CancellationToken token)
+    {
+        // The final-document step is retryable, so this method releases flags without adding a Poste claim.
+        await RecipientWorkflowHelper.MarkAsFailedAsync(
+            db,
+            n,
+            LolWorkflowStep.RecuperaDocumentoFinale,
+            msg,
+            token,
+            setGenericErrorState: false,
+            invalidateRecipient: false);
     }
 }

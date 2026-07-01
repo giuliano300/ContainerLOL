@@ -3,14 +3,13 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using RabbitMQ.Client;
-using RabbitMQ.Client.Events;
 using ServiceReference;
 using SharedLib.Config;
 using SharedLib.Db;
+using SharedLib.Messaging;
 using SharedLib.Models;
 using SharedLib.Utils;
 using SharedLib.WsdlModels;
-using System.Text;
 
 public class ConfermaProcessor : BackgroundService
 {
@@ -25,6 +24,9 @@ public class ConfermaProcessor : BackgroundService
 
     private const string QueueName = "conferma_lol_queue";
 
+    /// <summary>
+    /// Builds the conferma background processor with its database, RabbitMQ and tracking dependencies.
+    /// </summary>
     public ConfermaProcessor(
         IServiceScopeFactory scopeFactory,
         IOptions<LolServiceOptions> options,
@@ -40,63 +42,25 @@ public class ConfermaProcessor : BackgroundService
         _channel = _connection.CreateModel();
     }
 
+    /// <summary>
+    /// Starts the RabbitMQ consumer that dispatches conferma messages one at a time.
+    /// </summary>
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _channel.QueueDeclare(queue: QueueName, durable: true, exclusive: false, autoDelete: false);
-
-        _channel.BasicQos(
-            prefetchSize: 0,
-            prefetchCount: 1,
-            global: false);
-
-        var consumer = new AsyncEventingBasicConsumer(_channel);
-        consumer.Received += async (model, ea) =>
-        {
-            var acquired = await _semaphore.WaitAsync(0, stoppingToken);
-            if (!acquired)
-            {
-                _logger.LogWarning("⚠️ Processo già in esecuzione. Skip del messaggio.");
-                _channel.BasicNack(ea.DeliveryTag, false, requeue: true); // rimanda il messaggio in coda
-                return;
-            }
-
-            try
-            {
-                var body = ea.Body.ToArray();
-                var json = Encoding.UTF8.GetString(body);
-
-                ConfermaItem? item;
-                try
-                {
-                    item = JsonConvert.DeserializeObject<ConfermaItem>(json);
-                    if (item == null)
-                    {
-                        _logger.LogWarning("Messaggio non valido: {Json}", json);
-                        _channel.BasicAck(ea.DeliveryTag, false);
-                        return;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Errore nella deserializzazione del messaggio RabbitMQ.");
-                    _channel.BasicAck(ea.DeliveryTag, false);
-                    return;
-                }
-
-                await ProcessItemAsync(item, stoppingToken);
-                _channel.BasicAck(ea.DeliveryTag, false);
-            }
-            finally
-            {
-                _semaphore.Release();
-            }
-        };
-
-        _channel.BasicConsume(queue: QueueName, autoAck: false, consumer: consumer);
-
-        return Task.CompletedTask;
+        // RabbitConsumerHelper centralizes queue declaration, ack/nack, deserialization errors and local serialization.
+        return RabbitConsumerHelper.StartSingleMessageConsumerAsync(
+            _channel,
+            _semaphore,
+            QueueName,
+            _logger,
+            JsonConvert.DeserializeObject<ConfermaItem>,
+            ProcessItemAsync,
+            stoppingToken);
     }
 
+    /// <summary>
+    /// Loads the recipient, claims the Poste conferma call and executes the conferma workflow.
+    /// </summary>
     private async Task ProcessItemAsync(ConfermaItem item, CancellationToken stoppingToken)
     {
         using var scope = _scopeFactory.CreateScope();
@@ -104,6 +68,7 @@ public class ConfermaProcessor : BackgroundService
 
         try
         {
+            // Load the recipient and operation user required to call Poste.
             var n = await db.Recipients
                 .Include(x => x.Operations).ThenInclude(o => o.Users)
                 .FirstOrDefaultAsync(x => x.Id == item.NameId, stoppingToken);
@@ -116,31 +81,57 @@ public class ConfermaProcessor : BackgroundService
 
             if (n.CurrentState != (int)CurrentState.documentoValidato)
             {
+                // The recipient is no longer eligible for conferma; release the local step flag.
                 _logger.LogWarning(
                     "Recipient {Id} già processato. Stato attuale: {State}",
                     n.Id,
                     n.CurrentState);
 
-                n.InProcessStep3 = false;
-                n.worked = true;
+                RecipientWorkflowHelper.ReleaseStep(n, LolWorkflowStep.Conferma);
                 await db.SaveChangesAsync(stoppingToken);
 
                 return;
             }
 
+            // Build the SOAP client using the operation user credentials.
             var user = n.Operations.Users;
             var service = LOLServiceHelper.GetNewServiceLOL(user, _options);
 
+            // The claim is committed before contacting Poste; duplicates are acked without another call.
+            if (LolWorkflowContracts.GetMode(LolWorkflowStep.Conferma) != LolWorkflowMode.SingleCall)
+            {
+                throw new InvalidOperationException("Il contratto Conferma deve restare single-call.");
+            }
+
+            var confermaClaimed = await PosteCallClaimHelper.TryClaimAsync(
+                db,
+                n.Id,
+                PosteCallStep.Conferma,
+                "Chiamata conferma Poste avviata",
+                stoppingToken);
+            if (!confermaClaimed)
+            {
+                _logger.LogWarning(
+                    "Chiamata conferma Poste già avviata per recipient {Id}. Messaggio RabbitMQ scartato.",
+                    n.Id);
+
+                return;
+            }
+
+            // Build the request after the claim so duplicate messages cannot reach Poste.
             var richieste = new[] { new Richiesta { IDRichiesta = n.RequestId } };
+            // This is the protected Poste conferma call.
             var preConferma = await service.PreConfermaAsync(richieste, true);
             var result = preConferma.PreConfermaResult;
 
             if (result.CEResult.Type == "I" && result.DestinatariLettera?.Length > 0)
             {
+                // Poste accepted the confirm call; move the recipient to presaInCarico.
                 n.CurrentState = (int)CurrentState.presaInCarico;
                 n.Code = result.DestinatariLettera[0].IdRicevuta;
                 n.Message = "Presa in Carico Poste";
 
+                // Existing behavior: fetch the final document immediately when conferma succeeds.
                 var dcs = await service.RecuperaDocumentoFinaleAsync(n.Code);
                 if (dcs.RecuperaDocumentoFinaleResult.CEResult.Type == "I")
                     n.PathRecoveryFile = Convert.ToBase64String(dcs.RecuperaDocumentoFinaleResult.Documento.Contenuto);
@@ -149,6 +140,7 @@ public class ConfermaProcessor : BackgroundService
             }
             else
             {
+                // Poste rejected the confirm call; persist the error state for external handling.
                 n.Message = result.CEResult.Description;
                 n.Valid = false;
                 n.CurrentState = (int)CurrentState.ErroreConfirm;
@@ -156,16 +148,9 @@ public class ConfermaProcessor : BackgroundService
                 _logger.LogWarning($"Errore conferma recipient n.{n.Id}");
             }
 
-            n.InProcessStep3 = false;
-            n.worked = true;
-
-            db.RecipientWorks.Add(new RecipientWorks
-            {
-                Message = n.Message,
-                RecipientId = n.Id,
-                WorkDate = DateTime.UtcNow,
-                WorkStatus = (int)WorkStatus.InviatoConferma
-            });
+            // Release the step and record the audit row after the processor has a final result.
+            RecipientWorkflowHelper.ReleaseStep(n, LolWorkflowStep.Conferma);
+            RecipientWorkflowHelper.AddProcessedWork(db, n.Id, LolWorkflowStep.Conferma, n.Message);
 
             await db.SaveChangesAsync(stoppingToken);
         }
@@ -176,21 +161,13 @@ public class ConfermaProcessor : BackgroundService
             var n = await db.Recipients.FirstOrDefaultAsync(x => x.Id == item.NameId, stoppingToken);
             if (n != null)
             {
-                n.CurrentState = (int)CurrentState.ErroreGenerico;
-                n.Message = ex.Message;
-                n.Valid = false;
-                n.InProcessStep3 = false;
-                n.worked = true;
-
-                db.RecipientWorks.Add(new RecipientWorks
-                {
-                    Message = ex.Message,
-                    RecipientId = n.Id,
-                    WorkDate = DateTime.UtcNow,
-                    WorkStatus = (int)WorkStatus.InviatoConferma
-                });
-
-                await db.SaveChangesAsync(stoppingToken);
+                // Failure paths must release the conferma step so external recovery can decide the next action.
+                await RecipientWorkflowHelper.MarkAsFailedAsync(
+                    db,
+                    n,
+                    LolWorkflowStep.Conferma,
+                    ex.Message,
+                    stoppingToken);
             }
         }
         finally

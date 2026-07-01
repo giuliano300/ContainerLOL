@@ -7,10 +7,16 @@ namespace SharedLib.Db;
 
 public partial class AppDbContext : DbContext
 {
+    /// <summary>
+    /// Creates an unconfigured database context for tooling and design-time scenarios.
+    /// </summary>
     public AppDbContext()
     {
     }
 
+    /// <summary>
+    /// Creates a database context with the configured runtime options.
+    /// </summary>
     public AppDbContext(DbContextOptions<AppDbContext> options)
         : base(options)
     {
@@ -42,7 +48,11 @@ public partial class AppDbContext : DbContext
 
     public virtual DbSet<Users> Users { get; set; }
     public virtual DbSet<RecipientWorks> RecipientWorks { get; set; }
+    public virtual DbSet<PosteCallClaims> PosteCallClaims { get; set; }
 
+    /// <summary>
+    /// Configures database mappings, indexes and relationships for the LOL automation models.
+    /// </summary>
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Bulletins>(entity =>
@@ -79,6 +89,30 @@ public partial class AppDbContext : DbContext
             entity.HasOne(d => d.Recipient).WithMany(p => p.RecipientWorks)
                 .HasForeignKey(d => d.RecipientId)
                 .HasConstraintName("FK_RecipientWorks_Recipients");
+        });
+
+        modelBuilder.Entity<PosteCallClaims>(entity =>
+        {
+            // PosteCallClaims is the persistent idempotency table for single-call Poste operations.
+            entity.ToTable("PosteCallClaims");
+
+            // The unique index prevents more than one automatic call for the same recipient and step.
+            entity.HasIndex(e => new { e.RecipientId, e.Step }, "UQ_PosteCallClaims_RecipientId_Step")
+                .IsUnique();
+
+            entity.Property(e => e.Id).HasColumnName("Id");
+            entity.Property(e => e.RecipientId).HasColumnName("RecipientId");
+            entity.Property(e => e.Step).HasColumnName("Step");
+            entity.Property(e => e.CreatedAt)
+                .HasColumnType("datetime2(3)")
+                .HasColumnName("CreatedAt");
+            entity.Property(e => e.Message)
+                .HasMaxLength(500)
+                .HasColumnName("Message");
+
+            entity.HasOne(d => d.Recipient).WithMany()
+                .HasForeignKey(d => d.RecipientId)
+                .HasConstraintName("FK_PosteCallClaims_Recipients");
         });
 
 
@@ -239,6 +273,12 @@ public partial class AppDbContext : DbContext
             entity.HasIndex(e => e.DigitalReturnReceipt, "IX_RecipientROL_8");
 
             entity.HasIndex(e => e.Format, "IX_RecipientROL_9");
+
+            // Composite indexes mirror the hot watcher filters: state, validity, LOL product, A4 format and step flag.
+            entity.HasIndex(e => new { e.CurrentState, e.Valid, e.ProductType, e.Format, e.InProcessStep1, e.Id }, "IX_Recipients_LOL_InvioWatcher");
+            entity.HasIndex(e => new { e.CurrentState, e.Valid, e.ProductType, e.Format, e.InProcessStep2, e.Id }, "IX_Recipients_LOL_ValorizzaWatcher");
+            entity.HasIndex(e => new { e.CurrentState, e.Valid, e.ProductType, e.Format, e.InProcessStep3, e.Id }, "IX_Recipients_LOL_ConfermaWatcher");
+            entity.HasIndex(e => new { e.CurrentState, e.Valid, e.ProductType, e.Format, e.InProcessStep4, e.Code, e.Id }, "IX_Recipients_LOL_RecuperaDocumentoWatcher");
 
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.Address).HasColumnName("address");
