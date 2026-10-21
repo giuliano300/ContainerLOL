@@ -1,10 +1,11 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using SharedLib.Db;
 using SharedLib.Models;
 using Conferma.Services;
 using SharedLib.WsdlModels;
 using SharedLib.Utils;
-using SharedLib.Messaging; // per IRabbitPublisher
+using SharedLib.Messaging;
+using SharedLib.Services; // per IRabbitPublisher
 
 public class ConfermaWatcher : BackgroundService
 {
@@ -33,11 +34,25 @@ public class ConfermaWatcher : BackgroundService
         {
             // Read the polling interval on every loop so configuration reloads can adjust scheduling.
             var delay = _configuration.GetValue<int>("Timers:ConfermaWatcherSeconds");
+            var batchSize = 20;
             try
             {
                 // Create a fresh scope for each polling cycle to keep DbContext lifetime short.
                 using var scope = _serviceProvider.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var schedule = await AutomationRuntimeSchedule.ReadAsync(db, "LOL:Conferma", stoppingToken);
+                if (schedule is not null)
+                {
+                    delay = (schedule.IntervalMinutes ?? Math.Max(1, delay / 60)) * 60;
+                    batchSize = schedule.BatchSize ?? batchSize;
+                    var manualRun = schedule.ManualRunRequestedAt.HasValue &&
+                        await AutomationRuntimeSchedule.TryConsumeManualRunAsync(db, "LOL:Conferma", stoppingToken);
+                    if (!schedule.Enabled || (!manualRun && !schedule.IsInWindow(DateTime.Now)))
+                    {
+                        await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+                        continue;
+                    }
+                }
 
                 // Select only the columns needed to queue conferma work; tracking full recipients is unnecessary here.
                 var newRecipients = await db.Recipients
@@ -51,7 +66,7 @@ public class ConfermaWatcher : BackgroundService
                         r.InProcessStep3 != true)
                     .OrderBy(r => r.Id)
                     .Select(r => new { r.Id, r.RequestId })
-                    .Take(20)
+                    .Take(batchSize)
                     .ToListAsync(stoppingToken);
 
                 var recipientsToPublish = new List<ConfermaItem>();

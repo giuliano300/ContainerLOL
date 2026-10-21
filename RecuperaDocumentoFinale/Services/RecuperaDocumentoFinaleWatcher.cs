@@ -1,10 +1,11 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using SharedLib.Db;
 using SharedLib.Models;
 using RecuperaDocumentoFinale.Services;
 using SharedLib.WsdlModels;
 using SharedLib.Utils;
 using SharedLib.Messaging;
+using SharedLib.Services;
 
 public class RecuperaDocumentoFinaleWatcher : BackgroundService
 {
@@ -32,11 +33,25 @@ public class RecuperaDocumentoFinaleWatcher : BackgroundService
         {
             // Read the polling interval on every loop so configuration reloads can adjust scheduling.
             var delay = _configuration.GetValue<int>("Timers:RecuperaDocumentoWatcherSeconds");
+            var batchSize = 50;
             try
             {
                 // Create a fresh scope for each polling cycle to keep DbContext lifetime short.
                 using var scope = _serviceProvider.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var schedule = await AutomationRuntimeSchedule.ReadAsync(db, "LOL:Recuperadocumentofinale", stoppingToken);
+                if (schedule is not null)
+                {
+                    delay = (schedule.IntervalMinutes ?? Math.Max(1, delay / 60)) * 60;
+                    batchSize = schedule.BatchSize ?? batchSize;
+                    var manualRun = schedule.ManualRunRequestedAt.HasValue &&
+                        await AutomationRuntimeSchedule.TryConsumeManualRunAsync(db, "LOL:Recuperadocumentofinale", stoppingToken);
+                    if (!schedule.Enabled || (!manualRun && !schedule.IsInWindow(DateTime.Now)))
+                    {
+                        await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+                        continue;
+                    }
+                }
 
                 // Select only the columns needed to queue document retrieval; tracking full recipients is unnecessary here.
                 var newRecipients = await db.Recipients
@@ -48,14 +63,11 @@ public class RecuperaDocumentoFinaleWatcher : BackgroundService
                         r.ProductType == (int)ProductTypes.LOL &&
                         r.Format == (int)FormatType.A4 &&
                         r.Code != null && r.Code != "" &&
-                        (
-                            r.PathRecoveryFile == null || 
-                            r.PathRecoveryFile == ""
-                        )
-                        && r.InProcessStep4 != true
+                        r.AttachedFileRaName == null &&
+                        r.InProcessStep4 != true
                      )
                     .Select(r => new { r.Id, r.RequestId })
-                    .Take(50)
+                    .Take(batchSize)
                     .ToListAsync(stoppingToken);
 
                 var recipientsToPublish = new List<ConfermaItem>();

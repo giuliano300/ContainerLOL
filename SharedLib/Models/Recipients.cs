@@ -58,6 +58,7 @@ public partial class Recipients
     public decimal? TotalPrice { get; set; }
 
     public byte[]? AttachedFile { get; set; }
+    public string? AttachedFileName { get; set; }
 
     public string? FileName { get; set; }
 
@@ -104,6 +105,7 @@ public partial class Recipients
     public byte[]? AttachedFileRr { get; set; }
 
     public byte[]? AttachedFileRa { get; set; }
+    public string? AttachedFileRaName { get; set; }
 
     public string? FiscalCode { get; set; }
 

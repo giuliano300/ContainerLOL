@@ -159,7 +159,7 @@ public class InvioProcessor : BackgroundService
                 Mittente = LOLServiceHelper.GetMittente(sender),
                 Opzioni = LOLServiceHelper.GetOpzioniLOL(n.PrintType, n.FrontBack),
                 NumeroDestinatari = 1,
-                Documento = LOLServiceHelper.GetDoc(n.AttachedFile!),
+                Documento = LOLServiceHelper.GetDoc(RecipientDocumentStorage.Read(n, "source") ?? throw new InvalidOperationException($"Documento allegato non trovato per destinatario {n.Id}")),
                 Nazionale = (n.State.ToUpper() == "ITALIA" || n.State.ToUpper() == "IT") ? "true" : "false",
                 Destinatari = new[] { LOLServiceHelper.GetDestinatarioLOL(n) }
             };

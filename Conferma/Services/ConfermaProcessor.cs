@@ -134,7 +134,7 @@ public class ConfermaProcessor : BackgroundService
                 // Existing behavior: fetch the final document immediately when conferma succeeds.
                 var dcs = await service.RecuperaDocumentoFinaleAsync(n.Code);
                 if (dcs.RecuperaDocumentoFinaleResult.CEResult.Type == "I")
-                    n.PathRecoveryFile = Convert.ToBase64String(dcs.RecuperaDocumentoFinaleResult.Documento.Contenuto);
+                    RecipientDocumentStorage.WriteFinal(n, dcs.RecuperaDocumentoFinaleResult.Documento.Contenuto);
 
                 _logger.LogInformation($"Conferma recipient n.{n.Id}");
             }

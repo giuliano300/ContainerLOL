@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using SharedLib.Db;
 using Valorizza.Services;
 using SharedLib.WsdlModels;
@@ -6,6 +6,7 @@ using SharedLib.Utils;
 using SharedLib.Models;
 using System.Diagnostics;
 using SharedLib.Messaging;
+using SharedLib.Services;
 
 public class ValorizzaWatcher : BackgroundService
 {
@@ -33,11 +34,25 @@ public class ValorizzaWatcher : BackgroundService
         {
             // Read the polling interval on every loop so configuration reloads can adjust scheduling.
             var delay = _configuration.GetValue<int>("Timers:ValorizzaWatcherSeconds");
+            var batchSize = 20;
             try
             {
                 // Create a fresh scope for each polling cycle to keep DbContext lifetime short.
                 using var scope = _serviceProvider.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var schedule = await AutomationRuntimeSchedule.ReadAsync(db, "LOL:Valorizza", stoppingToken);
+                if (schedule is not null)
+                {
+                    delay = (schedule.IntervalMinutes ?? Math.Max(1, delay / 60)) * 60;
+                    batchSize = schedule.BatchSize ?? batchSize;
+                    var manualRun = schedule.ManualRunRequestedAt.HasValue &&
+                        await AutomationRuntimeSchedule.TryConsumeManualRunAsync(db, "LOL:Valorizza", stoppingToken);
+                    if (!schedule.Enabled || (!manualRun && !schedule.IsInWindow(DateTime.Now)))
+                    {
+                        await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+                        continue;
+                    }
+                }
 
                 // Select only the columns needed to queue valorizza work; tracking full recipients is unnecessary here.
                 var newRecipients = await db.Recipients
@@ -51,7 +66,7 @@ public class ValorizzaWatcher : BackgroundService
                         r.InProcessStep2 != true)
                     .OrderBy(r => r.Id)
                     .Select(r => new { r.Id, r.RequestId })
-                    .Take(20)
+                    .Take(batchSize)
                     .ToListAsync(stoppingToken);
 
                 var recipientsToPublish = new List<ValorizzaItem>();

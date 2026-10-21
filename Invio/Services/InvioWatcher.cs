@@ -1,10 +1,11 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using SharedLib.Db;
 using SharedLib.Models;
 using Invio.Services;
 using SharedLib.WsdlModels;
 using SharedLib.Utils;
-using SharedLib.Messaging; // per IRabbitPublisher
+using SharedLib.Messaging;
+using SharedLib.Services; // per IRabbitPublisher
 
 public class InvioWatcher : BackgroundService
 {
@@ -35,11 +36,25 @@ public class InvioWatcher : BackgroundService
         {
             // Read the polling interval on every loop so configuration reloads can adjust scheduling.
             var delay = _configuration.GetValue<int>("Timers:InvioWatcherSeconds");
+            var batchSize = 20;
             try
             {
                 // Create a fresh scope for each polling cycle to keep DbContext lifetime short.
                 using var scope = _serviceProvider.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var schedule = await AutomationRuntimeSchedule.ReadAsync(db, "LOL:Invio", stoppingToken);
+                if (schedule is not null)
+                {
+                    delay = (schedule.IntervalMinutes ?? Math.Max(1, delay / 60)) * 60;
+                    batchSize = schedule.BatchSize ?? batchSize;
+                    var manualRun = schedule.ManualRunRequestedAt.HasValue &&
+                        await AutomationRuntimeSchedule.TryConsumeManualRunAsync(db, "LOL:Invio", stoppingToken);
+                    if (!schedule.Enabled || (!manualRun && !schedule.IsInWindow(DateTime.Now)))
+                    {
+                        await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+                        continue;
+                    }
+                }
 
                 // Select only the columns needed to queue invio work; tracking full recipients is unnecessary here.
                 var newRecipients = await db.Recipients
@@ -53,7 +68,7 @@ public class InvioWatcher : BackgroundService
                         r.InProcessStep1 != true)
                     .OrderBy(r => r.Id)
                     .Select(r => new { r.Id })
-                    .Take(20)
+                    .Take(batchSize)
                     .ToListAsync(stoppingToken);
 
                 var recipientsToPublish = new List<InvioItem>();

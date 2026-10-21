@@ -121,12 +121,9 @@ public class RecuperaDocumentoFinaleProcessor : BackgroundService
             var result = dcs.RecuperaDocumentoFinaleResult;
 
             if (result.CEResult.Type == "I")
-            {
-                // Store the recovered document content only when Poste returns a successful result.
-                n.PathRecoveryFile = Convert.ToBase64String(result.Documento.Contenuto);
-            }
+                RecipientDocumentStorage.WriteFinal(n, result.Documento.Contenuto);
 
-            n.Message = result.CEResult.Description;
+            //n.Message = result.CEResult.Description;
             RecipientWorkflowHelper.ReleaseStep(n, LolWorkflowStep.RecuperaDocumentoFinale);
             RecipientWorkflowHelper.AddProcessedWork(
                 db,

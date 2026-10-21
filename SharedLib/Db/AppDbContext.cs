@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using SharedLib.Models;
@@ -206,6 +206,7 @@ public partial class AppDbContext : DbContext
 
         modelBuilder.Entity<Recipients>(entity =>
         {
+            entity.ToTable(table => table.HasTrigger("TR_Recipients_SetCurrentStateChangedAt"));
             entity.HasKey(e => e.Id).HasName("PK_Names");
 
             entity.HasIndex(e => e.Address, "IX_RecipientROL");
@@ -283,7 +284,9 @@ public partial class AppDbContext : DbContext
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.Address).HasColumnName("address");
             entity.Property(e => e.AttachedFile).HasColumnName("attachedFile");
+            entity.Property(e => e.AttachedFileName).HasMaxLength(260).HasColumnName("attachedFileName");
             entity.Property(e => e.AttachedFileRa).HasColumnName("attachedFileRA");
+            entity.Property(e => e.AttachedFileRaName).HasMaxLength(260).HasColumnName("attachedFileRAName");
             entity.Property(e => e.AttachedFileRr).HasColumnName("attachedFileRR");
             entity.Property(e => e.BusinessName)
                 .HasMaxLength(550)
