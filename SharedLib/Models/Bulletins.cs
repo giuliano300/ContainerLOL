@@ -11,24 +11,24 @@ public partial class Bulletins
 
     public int ProductType { get; set; }
 
-    public string NumeroContoCorrente { get; set; } = null!;
+    public string? NumeroContoCorrente { get; set; }
 
-    public string IBAN { get; set; } = null!;
-    public string IntestatoA { get; set; } = null!;
+    public string? IBAN { get; set; }
+    public string? IntestatoA { get; set; }
 
-    public string ImportoEuro { get; set; } = null!;
+    public string? ImportoEuro { get; set; }
 
-    public string EseguitoDaNominativo { get; set; } = null!;
+    public string? EseguitoDaNominativo { get; set; }
 
-    public string EseguitoDaIndirizzo { get; set; } = null!;
+    public string? EseguitoDaIndirizzo { get; set; }
 
-    public string EseguitoDaLocalita { get; set; } = null!;
+    public string? EseguitoDaLocalita { get; set; }
 
-    public string AnnoDiRiferimento { get; set; } = null!;
+    public string? AnnoDiRiferimento { get; set; }
 
-    public string EseguitoDaCap { get; set; } = null!;
+    public string? EseguitoDaCap { get; set; }
 
-    public string CodiceCliente { get; set; } = null!;
+    public string? CodiceCliente { get; set; }
 
     public string? Causale { get; set; }
 

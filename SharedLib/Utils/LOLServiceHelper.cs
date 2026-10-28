@@ -163,7 +163,7 @@ public static class LOLServiceHelper
     public static Bollettino896 GetBollettino896(Bulletins bollettino)
     {
         Bollettino896 b = new Bollettino896();
-        b.NumeroContoCorrente = bollettino.NumeroContoCorrente;
+        b.NumeroContoCorrente = bollettino.NumeroContoCorrente!.Replace("CC", "");
         b.IntestatoA = bollettino.IntestatoA;
         b.FormatoStampa = 0;
         b.AdditionalInfo = "";
