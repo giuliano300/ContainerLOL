@@ -22,6 +22,7 @@ public sealed record AutomationRuntimeSchedule(
             if (closeAfterRead) await connection.OpenAsync(cancellationToken);
             try
             {
+                await TryTouchHeartbeatAsync(connection, key, cancellationToken);
                 await using var command = connection.CreateCommand();
                 command.CommandText = "SELECT Enabled, StartTime, EndTime, IntervalMinutes, BatchSize, ManualRunRequestedAt FROM dbo.AutomationRuntimeSettings WHERE AutomationKey = @key";
                 var parameter = command.CreateParameter();
@@ -49,6 +50,18 @@ public sealed record AutomationRuntimeSchedule(
             // During deployment the table may not exist yet; the JSON schedule remains active.
             return null;
         }
+    }
+
+    private static async Task TryTouchHeartbeatAsync(System.Data.Common.DbConnection connection, string key, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "MERGE dbo.AutomationHeartbeats AS t USING (SELECT @key AS AutomationKey) AS s ON t.AutomationKey=s.AutomationKey WHEN MATCHED THEN UPDATE SET LastBeatAtUtc=SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT(AutomationKey,LastBeatAtUtc) VALUES(@key,SYSUTCDATETIME());";
+            var parameter = command.CreateParameter(); parameter.ParameterName = "@key"; parameter.Value = key; command.Parameters.Add(parameter);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch { }
     }
 
     public bool IsInWindow(DateTime now)
