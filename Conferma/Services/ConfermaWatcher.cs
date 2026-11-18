@@ -33,7 +33,7 @@ public class ConfermaWatcher : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             // Read the polling interval on every loop so configuration reloads can adjust scheduling.
-            var delay = _configuration.GetValue<int>("Timers:ConfermaWatcherSeconds");
+            var delay = Math.Max(60, _configuration.GetValue<int>("Timers:ConfermaWatcherSeconds"));
             var batchSize = 20;
             try
             {

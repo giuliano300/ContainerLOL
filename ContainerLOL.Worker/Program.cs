@@ -18,9 +18,12 @@ builder.Configuration
     .AddJsonFile("sharedsettings.json", optional: false, reloadOnChange: true)
     .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
 
+var logDirectory = Path.Combine(AppContext.BaseDirectory, "Logs");
+Directory.CreateDirectory(logDirectory);
+
 Log.Logger = new LoggerConfiguration()
     .WriteTo.Console()
-    .WriteTo.File("Logs/log-.txt", rollingInterval: RollingInterval.Day)
+    .WriteTo.File(Path.Combine(logDirectory, "log-.txt"), rollingInterval: RollingInterval.Day)
     .CreateLogger();
 
 builder.Services.AddSerilog();
