@@ -79,7 +79,7 @@ public class RecuperaDocumentoFinaleProcessor : BackgroundService
                 return;
             }
 
-            if (n.CurrentState != (int)CurrentState.presaInCarico)
+            if (n.CurrentState != (int)CurrentState.inlavorazione)
             {
                 // The recipient is no longer eligible for document recovery; release the step flag.
                 _logger.LogWarning(

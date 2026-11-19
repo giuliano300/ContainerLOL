@@ -123,6 +123,9 @@ public partial class Recipients
     public bool? InProcessStep3 { get; set; }
     public bool? InProcessStep4 { get; set; }
 
+    /// <summary>Indica che ROL/LOL deve ancora ottenere la presa in carico da Poste.</summary>
+    public bool? RequiresAcceptanceCheck { get; set; }
+
 
 
     public virtual ICollection<Bulletins> Bulletins { get; set; } = new List<Bulletins>();

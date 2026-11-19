@@ -224,7 +224,7 @@ Ogni processor deve:
 
 ### RecuperaDocumentoFinale
 
-- Stato iniziale richiesto: `CurrentState.presaInCarico`.
+- Stato iniziale richiesto: `CurrentState.inlavorazione` (presa in carico Poste verificata).
 - Contratto: `Retryable`.
 - Non deve usare claim.
 - Deve rilasciare sempre `InProcessStep4` in caso di errore.

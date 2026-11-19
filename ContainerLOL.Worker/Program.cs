@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
 using RecuperaDocumentoFinale.Services;
+using RecuperaPresaInCarico.Services;
 using Serilog;
 using SharedLib.Config;
 using SharedLib.Db;
@@ -87,6 +88,8 @@ builder.Services.AddSingleton<IConfermaQueue, ConfermaQueue>();
 builder.Services.AddSingleton<IConfermaQueueTracker, ConfermaQueueTracker>();
 builder.Services.AddHostedService<ConfermaProcessor>();
 builder.Services.AddHostedService<ConfermaWatcher>();
+builder.Services.AddHostedService<RecuperaPresaInCaricoWorker>();
+
 
 builder.Services.AddSingleton<IRecuperaDocumentoFinaleQueue, RecuperaDocumentoFinaleQueue>();
 builder.Services.AddSingleton<IRecuperaDocumentoFinaleQueueTracker, RecuperaDocumentoFinaleQueueTracker>();

@@ -126,10 +126,10 @@ public class ConfermaProcessor : BackgroundService
 
             if (result.CEResult.Type == "I" && result.DestinatariLettera?.Length > 0)
             {
-                // Poste accepted the confirm call; move the recipient to presaInCarico.
-                n.CurrentState = (int)CurrentState.presaInCarico;
                 n.Code = result.DestinatariLettera[0].IdRicevuta;
-                n.Message = "Presa in Carico Poste";
+                n.CurrentState = (int)CurrentState.presaInCarico;
+                n.RequiresAcceptanceCheck = true;
+                n.Message = "Preconferma accettata - in attesa presa in carico Poste";
 
                 // Existing behavior: fetch the final document immediately when conferma succeeds.
                 var dcs = await service.RecuperaDocumentoFinaleAsync(n.Code);
@@ -175,4 +175,5 @@ public class ConfermaProcessor : BackgroundService
             _tracker.Untrack(item.NameId);
         }
     }
+
 }

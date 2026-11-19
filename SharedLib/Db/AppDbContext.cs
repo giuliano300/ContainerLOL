@@ -345,6 +345,7 @@ public partial class AppDbContext : DbContext
                 .HasMaxLength(50)
                 .HasColumnName("reaNumber");
             entity.Property(e => e.ReturnReceipt).HasColumnName("returnReceipt");
+            entity.Property(e => e.RequiresAcceptanceCheck).HasColumnName("requiresAcceptanceCheck");
             entity.Property(e => e.State)
                 .HasMaxLength(50)
                 .HasColumnName("state");

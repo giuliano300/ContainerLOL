@@ -57,7 +57,7 @@ public class RecuperaDocumentoFinaleWatcher : BackgroundService
                 var newRecipients = await db.Recipients
                     .AsNoTracking()
                     .Where(r =>
-                        r.CurrentState == (int)CurrentState.presaInCarico &&
+                        r.CurrentState == (int)CurrentState.inlavorazione &&
                         r.Valid &&
                         r.Operations.Complete &&
                         r.ProductType == (int)ProductTypes.LOL &&

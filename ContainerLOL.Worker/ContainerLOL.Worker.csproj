@@ -24,6 +24,7 @@
     <Compile Include="..\Invio\Services\*.cs" Link="Steps\Invio\Services\%(Filename)%(Extension)" />
     <Compile Include="..\Valorizza\Services\*.cs" Link="Steps\Valorizza\Services\%(Filename)%(Extension)" />
     <Compile Include="..\Conferma\Services\*.cs" Link="Steps\Conferma\Services\%(Filename)%(Extension)" />
+    <Compile Include="..\RecuperaPresaInCarico\Services\*.cs" Link="Steps\RecuperaPresaInCarico\Services\%(Filename)%(Extension)" />
     <Compile Include="..\RecuperaDocumentoFinale\Services\*.cs" Link="Steps\RecuperaDocumentoFinale\Services\%(Filename)%(Extension)" />
   </ItemGroup>
 
